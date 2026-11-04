@@ -17,6 +17,7 @@ import CustomSelect from "./CustomSelect";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
 import { usePersistentState } from "./hooks/usePersistentState";
+import { apiRequest } from "./api/client";
 
 type Screen = "home" | "register" | "login" | "recover" | "new-password" | "app";
 
@@ -396,7 +397,7 @@ function Registration({ navigate }: { navigate: (screen: Screen) => void }) {
     );
   };
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     const nextErrors = validateRegistration(values, method);
     setTouched({ name: true, contact: true, password: true, confirmation: true });
@@ -409,13 +410,28 @@ function Registration({ navigate }: { navigate: (screen: Screen) => void }) {
       return;
     }
     setLoading(true);
-    window.setTimeout(() => {
-      registeredContacts.current.add(contact);
-      setUser({ name: values.name.trim() });
+    try {
+      // Отправляем запрос на твой бэкенд FastAPI
+      await apiRequest("/api/auth/register", {
+        method: "POST",
+        body: {
+          name: values.name.trim(),
+          email: method === "email" ? contact : null,
+          phone: method === "phone" ? contact : null,
+          password: values.password
+        }
+      });
+
       setLoading(false);
       setSuccess(true);
+      setUser({ name: values.name.trim() });
       window.setTimeout(() => navigate("app"), 800);
-    }, 1100);
+      
+    } catch (error: any) {
+      setLoading(false);
+      // Если бэкенд вернул ошибку (например, пользователь уже существует), выводим её на экран
+      setErrors({ contact: error.message || "Ошибка регистрации на сервере" });
+    }
   };
 
   return (
@@ -502,19 +518,37 @@ function Login({ navigate }: { navigate: (screen: Screen) => void }) {
     setContact(nextDigits ? formatPhone(`+7${nextDigits}`) : "");
   };
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
+
     if (!contact.trim() || !password) {
-      setError("Неверный логин или пароль");
+      setError("Заполните все поля");
       return;
     }
+
     setLoading(true);
-    window.setTimeout(() => {
+
+    try {
+      // Отправляем обычный JSON, который ожидает клиент.ts
+      const data = await apiRequest<{ access_token: string }>("/api/auth/login", {
+        method: "POST",
+        body: {
+          username: contact.trim(),
+          password: password
+        }
+      });
+
+      // Сохраняем JWT-токен
+      localStorage.setItem("token", data.access_token);
+
       setLoading(false);
-      if (password === "Finzentra2025") navigate("app");
-      else setError("Неверный логин или пароль");
-    }, 1000);
+      navigate("app");
+
+    } catch (err: any) {
+      setLoading(false);
+      setError("Неверный логин или пароль");
+    }
   };
 
   return (
