@@ -7,13 +7,11 @@ from dotenv import load_dotenv
 import sys
 import pathlib
 
-# Добавляем путь к проекту для импорта моделей
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 load_dotenv()
 
 # Импорт Base из твоих моделей
-from app.models import Base 
+from app.models import Base  # noqa: E402
 
 target_metadata = Base.metadata
 
