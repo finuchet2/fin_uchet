@@ -14,24 +14,24 @@ Money = Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="
 class ReportRowSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: str
+    id: int
     name: str
-    amount: Decimal
-    percentage: Decimal
+    amount: Money
+    percentage: Money
 
 
 class ReportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    income: Decimal
-    expense: Decimal
-    tax: Decimal
-    net: Decimal
+    income: Money
+    expense: Money
+    tax: Money
+    net: Money
 
-    income_percentage: Decimal
-    expense_percentage: Decimal
-    tax_percentage: Decimal
-    net_percentage: Decimal
+    income_percentage: Money
+    expense_percentage: Money
+    tax_percentage: Money
+    net_percentage: Money
 
     income_rows: list[ReportRowSchema]
     expense_rows: list[ReportRowSchema]
@@ -43,10 +43,10 @@ class ReportResponse(BaseModel):
 class ComparisonMetricSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    current: Decimal
-    previous: Decimal
-    difference: Decimal
-    percent_change: Decimal | None
+    current: Money
+    previous: Money
+    difference: Money
+    percent_change: Money | None
     trend: Literal["UP", "DOWN", "UNCHANGED"]
 
 
