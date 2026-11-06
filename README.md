@@ -9,7 +9,7 @@ PostgreSQL
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # venv\Scripts\activate   # Windows
-pip install -r requirements.txt
+pip install -r requirements.tx
 ```
 2. Настройка переменных окружения
 Создай файл .env в корне проекта (рядом с requirements.txt) и заполни его:
