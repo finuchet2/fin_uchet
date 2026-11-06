@@ -51,6 +51,7 @@ class User(Base):
             "email IS NOT NULL OR phone IS NOT NULL OR yandex_id IS NOT NULL OR vk_id IS NOT NULL",
             name="has_login_method",
         ),
+        CheckConstraint("email IS NULL OR email = lower(email)", name="email_lowercase"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -68,6 +69,7 @@ class BusinessProject(Base):
     __tablename__ = "business_projects"
     __table_args__ = (
         UniqueConstraint("user_id", "name", name="uq_business_projects_user_id_name"),
+        UniqueConstraint("id", "user_id", name="uq_business_projects_id_user_id"),
         CheckConstraint("char_length(name) BETWEEN 2 AND 60", name="name_length"),
         CheckConstraint("description IS NULL OR char_length(description) <= 120", name="description_length"),
     )
@@ -84,12 +86,15 @@ class BusinessProject(Base):
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (
-        UniqueConstraint("user_id", "name", "type", name="uq_categories_user_id_name_type"),
-        # В PostgreSQL NULL != NULL, поэтому для системных категорий нужен отдельный индекс
         Index(
-            "uq_categories_system_name_type",
-            "name",
-            "type",
+            "uq_categories_user_lower_name_type",
+            "user_id", text("lower(name)"), "type",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_categories_system_lower_name_type",
+            text("lower(name)"), "type",
             unique=True,
             postgresql_where=text("user_id IS NULL"),
         ),
@@ -120,6 +125,11 @@ class Transaction(Base):
             ["categories.id", "categories.type"],
             name="fk_transactions_category_id_type_categories",
         ),
+        ForeignKeyConstraint(
+        ["project_id", "user_id"],
+        ["business_projects.id", "business_projects.user_id"],
+        name="fk_transactions_project_id_user_id_business_projects",
+        ),
         CheckConstraint("amount > 0", name="amount_positive"),
         CheckConstraint("amount < 1000000000000", name="amount_max"),  # 12 цифр до запятой
         CheckConstraint("comment IS NULL OR char_length(comment) <= 255", name="comment_length"),
@@ -130,7 +140,7 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    project_id = Column(Integer, ForeignKey("business_projects.id", ondelete="RESTRICT"), nullable=False, index=True)
+    project_id = Column(Integer, nullable=False, index=True)
     category_id = Column(Integer, nullable=False, index=True)
     type = Column(transaction_type_enum, nullable=False)
 
