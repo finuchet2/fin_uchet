@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 import FinancialDashboard from "./FinancialDashboard";
+import BankStatementUpload from "./BankStatementUpload";
 import CustomSelect from "./CustomSelect";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
@@ -671,7 +672,7 @@ function NewPassword({ navigate }: { navigate: (screen: Screen) => void }) {
   );
 }
 
-type CabinetSection = "dashboard" | "operations" | "projects" | "settings";
+type CabinetSection = "dashboard" | "operations" | "projects" | "settings" | "statement";
 type CabinetIconName =
   | CabinetSection
   | "plus"
@@ -720,6 +721,7 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
         <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.5v-.1A1.7 1.7 0 0 0 8.4 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4 15a1.7 1.7 0 0 0-1.5-1H2.4V10h.1A1.7 1.7 0 0 0 4 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.46 4.2l.06.06A1.7 1.7 0 0 0 8.4 4 1.7 1.7 0 0 0 9.5 2.5v-.1h4.1v.1A1.7 1.7 0 0 0 15 4a1.7 1.7 0 0 0 1.88.26l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.5 1h.1v4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
       </>
     ),
+    statement: <path d="M7 3h7l5 5v13H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />,
     plus: <path d="M12 5v14M5 12h14" />,
     bell: (
       <>
@@ -799,6 +801,7 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
 const cabinetNavigation: { id: CabinetSection; label: string }[] = [
   { id: "dashboard", label: "Дашборд" },
   { id: "operations", label: "Операции" },
+  { id: "statement", label: "Импорт выписки" },
   { id: "projects", label: "Проекты" },
   { id: "settings", label: "Настройки" },
 ];
@@ -2014,6 +2017,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const sectionTitles: Record<CabinetSection, [string, string]> = {
     dashboard: [`Добрый день, ${userName}`, "Вот что происходит с финансами вашего бизнеса"],
     operations: ["Операции", "Контролируйте каждое движение денег"],
+    statement: ["Импорт выписки", "Загрузите выписку для проверки операций"],
     projects: ["Проекты", "Финансы бизнеса по направлениям"],
     settings: ["Настройки", "Справочники и параметры учёта"],
   };
@@ -2102,7 +2106,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
                 </div>
               )}
             </div>
-            <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>
+            {section !== "statement" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
           </div>
         </header>
         <div className="cabinet-content">
@@ -2113,6 +2117,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
+          {section === "statement" && <BankStatementUpload />}
           {opNotice && (
             <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
           )}
