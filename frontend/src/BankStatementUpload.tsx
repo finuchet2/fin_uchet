@@ -20,8 +20,10 @@ function formatFileSize(size: number) {
 
 export default function BankStatementUpload({
   onReviewStateChange,
+  onNavigateToOperations,
 }: {
   onReviewStateChange: (fileName: string | null) => void;
+  onNavigateToOperations: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<UploadState>("default");
@@ -51,6 +53,12 @@ export default function BankStatementUpload({
     if (inputRef.current) inputRef.current.value = "";
   };
 
+  const startAnotherUpload = () => {
+    removeFile();
+    setIsReviewing(false);
+    onReviewStateChange(null);
+  };
+
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const droppedFile = event.dataTransfer.files[0];
@@ -62,6 +70,8 @@ export default function BankStatementUpload({
     return (
       <BankStatementReview
         fileName={file?.name ?? ""}
+        onUploadAnother={startAnotherUpload}
+        onNavigateToOperations={onNavigateToOperations}
         onBack={() => {
           setIsReviewing(false);
           onReviewStateChange(null);

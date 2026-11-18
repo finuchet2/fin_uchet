@@ -2122,7 +2122,12 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
-          {section === "statement" && <BankStatementUpload onReviewStateChange={setReviewFileName} />}
+          {section === "statement" && (
+            <BankStatementUpload
+              onReviewStateChange={setReviewFileName}
+              onNavigateToOperations={() => navigateSection("operations")}
+            />
+          )}
           {opNotice && (
             <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
           )}

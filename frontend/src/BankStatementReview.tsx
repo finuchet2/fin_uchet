@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowLeftRight,
+  ArrowRight,
   Check,
   CheckCheck,
   CircleCheck,
@@ -10,6 +11,7 @@ import {
   Info,
   Minus,
   ShieldCheck,
+  Upload,
   X,
 } from "lucide-react";
 import { createPortal } from "react-dom";
@@ -292,6 +294,19 @@ function formatCurrency(amount: number) {
   return `${currencyFormatter.format(amount)} ₽`;
 }
 
+function formatOperationCount(count: number) {
+  const lastTwoDigits = count % 100;
+  const lastDigit = count % 10;
+  const word = lastTwoDigits >= 11 && lastTwoDigits <= 14
+    ? "операций"
+    : lastDigit === 1
+      ? "операция"
+      : lastDigit >= 2 && lastDigit <= 4
+        ? "операции"
+        : "операций";
+  return `${count} ${word}`;
+}
+
 const filterLabels: { id: QuickFilter; label: string }[] = [
   { id: "all", label: "Все операции" },
   { id: "review", label: "Требуют проверки" },
@@ -328,13 +343,18 @@ function FieldConfidence({ suggestion }: { suggestion?: RecognitionSuggestion })
 export default function BankStatementReview({
   fileName,
   onBack,
+  onUploadAnother,
+  onNavigateToOperations,
 }: {
   fileName: string;
   onBack: () => void;
+  onUploadAnother: () => void;
+  onNavigateToOperations: () => void;
 }) {
   const [operations, setOperations] = useState(initialOperations);
   const [filter, setFilter] = useState<QuickFilter>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [importResult, setImportResult] = useState<{ added: number; excluded: number } | null>(null);
   const [notice, setNotice] = useState("");
   const [openDuplicateId, setOpenDuplicateId] = useState<string | null>(null);
   const [duplicatePopoverPosition, setDuplicatePopoverPosition] = useState({ top: 8, left: 8 });
@@ -354,6 +374,9 @@ export default function BankStatementReview({
     }
     return totals;
   }, { income: 0, expense: 0 }), [operations]);
+  const selectedTotal = useMemo(() => operations.reduce((total, operation) => (
+    selectedIds.includes(operation.id) ? total + operation.amount : total
+  ), 0), [operations, selectedIds]);
 
   const visibleOperations = operations.filter((operation) => {
     if (filter === "excluded") return operation.status === "excluded";
@@ -452,8 +475,57 @@ export default function BankStatementReview({
       : [...current, id]);
   };
 
+  const excludeSelected = () => {
+    if (!selectedIds.length) return;
+    const excludedIds = new Set(selectedIds);
+    setOperations((current) => current.map((operation) => (
+      excludedIds.has(operation.id) ? { ...operation, status: "excluded" } : operation
+    )));
+    setSelectedIds([]);
+    setNotice(selectedIds.length === 1 ? "Операция исключена" : `Исключено операций: ${selectedIds.length}`);
+    window.setTimeout(() => setNotice(""), 3000);
+  };
+
+  const finalizeImport = () => {
+    if (!selectedIds.length && counts.review > 0) return;
+    const selected = new Set(selectedIds);
+    const finalizedOperations = operations.map((operation) => (
+      operation.status === "confirmed" || selected.has(operation.id)
+        ? { ...operation, status: "confirmed" as const }
+        : { ...operation, status: "excluded" as const }
+    ));
+    const added = finalizedOperations.filter((operation) => operation.status === "confirmed").length;
+    setOperations(finalizedOperations);
+    setSelectedIds([]);
+    setImportResult({ added, excluded: finalizedOperations.length - added });
+  };
+
   return (
-    <section className="operation-review" aria-labelledby="operation-review-title">
+    <section
+      className="operation-review"
+      aria-labelledby={importResult ? "operation-review-success-title" : "operation-review-title"}
+    >
+      {importResult ? (
+        <div className="operation-review__success" role="status">
+          <div className="operation-review__success-icon"><CircleCheck size={34} strokeWidth={1.8} /></div>
+          <p className="statement-eyebrow">Импорт завершён</p>
+          <h2 id="operation-review-success-title">Операции успешно импортированы</h2>
+          <p className="operation-review__success-copy">Выписка обработана, результат сохранён в учёте.</p>
+          <div className="operation-review__success-summary">
+            <div><strong>{importResult.added}</strong><span>операций добавлено в учёт</span></div>
+            <div><strong>{importResult.excluded}</strong><span>дубликатов и строк исключено</span></div>
+          </div>
+          <div className="operation-review__success-actions">
+            <button type="button" className="operation-review__success-secondary" onClick={onUploadAnother}>
+              <Upload size={16} /> Загрузить ещё одну выписку
+            </button>
+            <button type="button" className="operation-review__success-primary" onClick={onNavigateToOperations}>
+              Перейти к операциям <ArrowRight size={16} />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
       <button type="button" className="operation-review__back" onClick={onBack}>
         <ArrowLeft size={17} />
         <span>Назад к загрузке файла</span>
@@ -509,18 +581,6 @@ export default function BankStatementReview({
           </button>
         ))}
       </nav>
-
-      {selectedIds.length > 0 && (
-        <div className="operation-review__bulkbar" role="status">
-          <span>Выбрано: <strong>{selectedIds.length}</strong></span>
-          <button type="button" onClick={() => confirmOperations(selectedIds)}>
-            <Check size={15} /> Подтвердить выбранные
-          </button>
-          <button type="button" className="operation-review__bulk-clear" onClick={() => setSelectedIds([])}>
-            Снять выделение
-          </button>
-        </div>
-      )}
 
       <div className="operation-review__table-wrap" id="operation-review-table" role="tabpanel" aria-labelledby={`operation-filter-${filter}`}>
         <table className="operation-review__table">
@@ -798,6 +858,31 @@ export default function BankStatementReview({
         )}
       </div>
 
+      <div className="operation-review__sticky-bar">
+        <div className="operation-review__sticky-summary" aria-live="polite">
+          <strong>Выбрано к импорту: {formatOperationCount(selectedIds.length)}</strong>
+          <span>Итого: {formatCurrency(selectedTotal)}</span>
+        </div>
+        <div className="operation-review__sticky-actions">
+          <button
+            type="button"
+            className="operation-review__sticky-exclude"
+            disabled={selectedIds.length === 0}
+            onClick={excludeSelected}
+          >
+            Исключить выбранные
+          </button>
+          <button
+            type="button"
+            className="operation-review__sticky-confirm"
+            disabled={selectedIds.length === 0 && counts.review > 0}
+            onClick={finalizeImport}
+          >
+            Подтвердить импорт
+          </button>
+        </div>
+      </div>
+
       <footer className="operation-review__footer">
         <span>
           <CircleCheck size={15} />
@@ -806,6 +891,8 @@ export default function BankStatementReview({
         {notice && <span className="operation-review__toast" role="status"><Check size={14} />{notice}</span>}
         <span>Проверьте назначение и категорию перед подтверждением</span>
       </footer>
+        </>
+      )}
     </section>
   );
 }
