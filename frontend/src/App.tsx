@@ -91,13 +91,13 @@ function useAppUser() {
 
 function Logo({ compact = false, onClick }: { compact?: boolean; onClick?: () => void }) {
   return (
-    <button className="logo" type="button" aria-label="Finzentra — на главную" onClick={onClick}>
+    <button className="logo" type="button" aria-label="Bifintra — на главную" onClick={onClick}>
       <svg className="logo__mark" viewBox="0 0 40 40" aria-hidden="true">
         <path d="M8 27.5c6.2-1 10.4-4.7 12.7-11.2 2.7 4.3 6.5 6.8 11.3 7.5" />
         <path d="m26 18 6 5.8-7.4 3" />
         <path d="M8 12.5h8.5" />
       </svg>
-      {!compact && <span>Finzentra</span>}
+      {!compact && <span>Bifintra</span>}
     </button>
   );
 }
@@ -254,7 +254,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
             Не создавайте себе <span>вторую работу</span>
           </h1>
           <p className="hero__text">
-            Finzentra помогает держать финансы бизнеса под контролем, чтобы вы меньше
+            Bifintra помогает держать финансы бизнеса под контролем, чтобы вы меньше
             времени тратили на учёт и больше — на развитие своего дела.
           </p>
           <button className="button button--primary button--large" onClick={() => navigate("register")}>
@@ -262,7 +262,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
             <Icon name="arrow" />
           </button>
         </div>
-        <div className="brand-art" aria-label="Абстрактная графика Finzentra">
+        <div className="brand-art" aria-label="Абстрактная графика Bifintra">
           <div className="brand-art__orb" />
           <svg viewBox="0 0 620 500" aria-hidden="true">
             <defs>
@@ -277,7 +277,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
             <circle cx="123" cy="358" r="16" />
             <circle cx="361" cy="182" r="11" />
           </svg>
-          <div className="brand-art__monogram">F</div>
+          <div className="brand-art__monogram">B</div>
         </div>
       </section>
 
@@ -309,7 +309,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
         <div>
           <p className="eyebrow eyebrow--light">Начните сегодня</p>
           <h2>Пора освободить время для главного</h2>
-          <p>Начните вести финансовый учёт с Finzentra — проще, понятнее и без лишней рутины.</p>
+          <p>Начните вести финансовый учёт с Bifintra — проще, понятнее и без лишней рутины.</p>
         </div>
         <button className="button button--white button--large" onClick={() => navigate("register")}>
           Зарегистрироваться
@@ -473,7 +473,7 @@ function Registration({ navigate }: { navigate: (screen: Screen) => void }) {
         </form>
         <div className={`transition-note ${success ? "transition-note--active" : ""}`}>
           <span />
-          <p>{success ? "Аккаунт создан. Переходим в Finzentra…" : "После регистрации вы автоматически перейдёте на главный экран"}</p>
+          <p>{success ? "Аккаунт создан. Переходим в Bifintra…" : "После регистрации вы автоматически перейдёте на главный экран"}</p>
         </div>
         <p className="auth-switch">
           Уже есть аккаунт?{" "}
@@ -556,7 +556,7 @@ function Login({ navigate }: { navigate: (screen: Screen) => void }) {
       <section className="auth-card">
         <header className="auth-card__header">
           <p className="auth-kicker">С возвращением</p>
-          <h1>Вход в Finzentra</h1>
+          <h1>Вход в Bifintra</h1>
           <p>Войдите в свой аккаунт, чтобы продолжить.</p>
         </header>
         {error && <div className="form-alert" role="alert">{error}</div>}
@@ -646,7 +646,7 @@ function NewPassword({ navigate }: { navigate: (screen: Screen) => void }) {
             <div className="success-state__mark">✓</div>
             <p className="auth-kicker">Готово</p>
             <h1>Пароль изменён</h1>
-            <p>Теперь вы можете войти в Finzentra с новым паролем.</p>
+            <p>Теперь вы можете войти в Bifintra с новым паролем.</p>
             <PrimaryButton onClick={() => navigate("login")}>Перейти ко входу</PrimaryButton>
           </div>
         ) : (
@@ -1911,9 +1911,9 @@ function SettingsContent({ categories, setCategories, operations }: {
 }
 
 const STORAGE_KEYS = {
-  operations: "finzentra_bolt_operations",
-  projects: "finzentra_bolt_projects",
-  categories: "finzentra_bolt_categories",
+  operations: "bifintra_bolt_operations",
+  projects: "bifintra_bolt_projects",
+  categories: "bifintra_bolt_categories",
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;

@@ -288,7 +288,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(47, 112, 183
 .settings-row__count { color: #8192a3; font-size: 10px; }.settings-row > .cabinet-icon { width: 15px; }
 .bottom-nav,.mobile-add { display: none; }
 
-/* Справочники Finzentra */
+/* Справочники Bifintra */
 .directory { background: transparent; }
 .directory__intro { align-items: flex-start; }
 .directory-toast { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #cfe2f5; border-radius: 12px; color: #245C9C; background: #FFFFFF; box-shadow: 0 8px 22px rgba(36,92,156,.08); font-size: 12px; font-weight: 600; }
