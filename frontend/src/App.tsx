@@ -1963,6 +1963,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const { user } = useAppUser();
   const userName = user.name;
   const [section, setSection] = useState<CabinetSection>("dashboard");
+  const [reviewFileName, setReviewFileName] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingOperation, setEditingOperation] = useState<Operation | null>(null);
   const [opNotice, setOpNotice] = useState("");
@@ -1985,6 +1986,10 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const [openHeaderPopover, setOpenHeaderPopover] = useState<"notifications" | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const notificationsPopoverRef = useRef<HTMLDivElement>(null);
+  const navigateSection = (nextSection: CabinetSection) => {
+    setSection(nextSection);
+    if (nextSection !== "statement") setReviewFileName(null);
+  };
 
   useEffect(() => {
     if (!openHeaderPopover && !helpOpen) return;
@@ -2067,11 +2072,11 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   return (
     <div className="cabinet">
       <aside className="cabinet-sidebar">
-        <div className="cabinet-sidebar__logo"><Logo onClick={() => setSection("dashboard")} /></div>
+        <div className="cabinet-sidebar__logo"><Logo onClick={() => navigateSection("dashboard")} /></div>
         <nav className="cabinet-nav" aria-label="Разделы кабинета">
           <p>Рабочее пространство</p>
           {cabinetNavigation.map((item) => (
-            <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => setSection(item.id)}>
+            <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => navigateSection(item.id)}>
               <CabinetIcon name={item.id} /><span>{item.label}</span>
             </button>
           ))}
@@ -2085,7 +2090,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
       </aside>
 
       <main className="cabinet-main">
-        <header className="cabinet-header">
+        {!(section === "statement" && reviewFileName !== null) && <header className="cabinet-header">
           <div><p>{sectionTitles[section][1]}</p><h1>{sectionTitles[section][0]}</h1></div>
           <div className="cabinet-header__actions">
             <div className="header-popover-anchor" ref={notificationsPopoverRef}>
@@ -2108,7 +2113,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             </div>
             {section !== "statement" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
           </div>
-        </header>
+        </header>}
         <div className="cabinet-content">
           {section === "dashboard" && <DashboardContent projects={projects} operations={operations} periodType={periodType} selectedPeriod={selectedPeriod} onPeriodChange={(nextType, nextPeriod) => { setPeriodType(nextType); setSelectedPeriod(nextPeriod); }} selectedProjects={selectedProjectNames} onSelectedProjectsChange={setSelectedProjectNames} />}
           {section === "operations" && <OperationsContent operations={operations} projects={projects} onAdd={openNewOperation} onDelete={setPendingDeletion} onEdit={openEditOperation} periodType={periodType} selectedPeriod={selectedPeriod} />}
@@ -2117,7 +2122,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
-          {section === "statement" && <BankStatementUpload />}
+          {section === "statement" && <BankStatementUpload onReviewStateChange={setReviewFileName} />}
           {opNotice && (
             <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
           )}
@@ -2192,7 +2197,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
 
       <nav className="bottom-nav" aria-label="Разделы кабинета">
         {cabinetNavigation.map((item) => (
-          <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => setSection(item.id)}>
+          <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => navigateSection(item.id)}>
             <CabinetIcon name={item.id} /><span>{item.label}</span>
           </button>
         ))}

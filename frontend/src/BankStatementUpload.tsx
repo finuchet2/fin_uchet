@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
+import BankStatementReview from "./BankStatementReview";
 
 type UploadState = "default" | "dragging" | "error" | "loading" | "ready";
 
@@ -17,11 +18,15 @@ function formatFileSize(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1).replace(".", ",")} МБ`;
 }
 
-export default function BankStatementUpload() {
+export default function BankStatementUpload({
+  onReviewStateChange,
+}: {
+  onReviewStateChange: (fileName: string | null) => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<UploadState>("default");
   const [file, setFile] = useState<{ name: string; size: number } | null>(null);
-  const [notice, setNotice] = useState("");
+  const [isReviewing, setIsReviewing] = useState(false);
 
   useEffect(() => {
     if (state !== "loading") return;
@@ -31,7 +36,6 @@ export default function BankStatementUpload() {
 
   const handleFile = (selectedFile: File) => {
     const extension = selectedFile.name.split(".").pop()?.toLowerCase();
-    setNotice("");
     if (extension !== "csv" && extension !== "xlsx") {
       setFile(null);
       setState("error");
@@ -43,7 +47,6 @@ export default function BankStatementUpload() {
 
   const removeFile = () => {
     setFile(null);
-    setNotice("");
     setState("default");
     if (inputRef.current) inputRef.current.value = "";
   };
@@ -54,6 +57,18 @@ export default function BankStatementUpload() {
     if (droppedFile) handleFile(droppedFile);
     else setState("default");
   };
+
+  if (isReviewing) {
+    return (
+      <BankStatementReview
+        fileName={file?.name ?? ""}
+        onBack={() => {
+          setIsReviewing(false);
+          onReviewStateChange(null);
+        }}
+      />
+    );
+  }
 
   return (
     <section className="statement-page" aria-labelledby="statement-title">
@@ -94,7 +109,10 @@ export default function BankStatementUpload() {
                 <button
                   type="button"
                   className="statement-continue"
-                  onClick={() => setNotice("Проверьте операции и подтвердите их, чтобы добавить в финансовую отчётность.")}
+                  onClick={() => {
+                    setIsReviewing(true);
+                    onReviewStateChange(file?.name ?? "");
+                  }}
                 >
                   Перейти к проверке операций <ArrowRight size={17} />
                 </button>
@@ -143,7 +161,6 @@ export default function BankStatementUpload() {
               )}
             </div>
           )}
-          {notice && <p className="statement-notice" role="status">{notice}</p>}
           <div className="statement-upload-card__foot">
             <span><CheckCircle2 size={16} /> Поддерживаются выписки любых банков в форматах CSV и XLSX</span>
             <span>CSV <i /> XLSX</span>

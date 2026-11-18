@@ -7,6 +7,7 @@ type TruncatedValueProps = {
   className?: string;
   children?: ReactNode;
   showTooltip?: boolean;
+  strictOverflow?: boolean;
 };
 
 export default function TruncatedValue({
@@ -15,6 +16,7 @@ export default function TruncatedValue({
   className,
   children,
   showTooltip = true,
+  strictOverflow = false,
 }: TruncatedValueProps) {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [visible, setVisible] = useState(false);
@@ -22,7 +24,8 @@ export default function TruncatedValue({
   const handleMouseEnter = (event: MouseEvent<HTMLSpanElement>) => {
     if (!showTooltip) return;
     const element = event.currentTarget;
-    if (!value.includes("... ₽") && element.scrollWidth <= element.clientWidth) return;
+    const hasManualTruncation = !strictOverflow && value.includes("... ₽");
+    if (!hasManualTruncation && element.scrollWidth <= element.clientWidth) return;
     const rect = element.getBoundingClientRect();
     setPosition({ x: rect.left + rect.width / 2, y: rect.top });
     setVisible(true);
@@ -35,7 +38,8 @@ export default function TruncatedValue({
     }
     if (!visible) return;
     const element = event.currentTarget;
-    if (!value.includes("... ₽") && element.scrollWidth <= element.clientWidth) {
+    const hasManualTruncation = !strictOverflow && value.includes("... ₽");
+    if (!hasManualTruncation && element.scrollWidth <= element.clientWidth) {
       setVisible(false);
       return;
     }
