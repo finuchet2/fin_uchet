@@ -14,7 +14,7 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     navigator.serviceWorker
       .register(`${import.meta.env.BASE_URL}sw.js`)
       .catch((error: unknown) => {
-        console.error('Не удалось включить офлайн-режим Finzentra.', error);
+        console.error('Не удалось включить офлайн-режим Bifintra.', error);
       });
   });
 }

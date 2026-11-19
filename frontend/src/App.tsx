@@ -13,6 +13,7 @@ import {
   useState,
 } from "react";
 import FinancialDashboard from "./FinancialDashboard";
+import BankStatementUpload from "./BankStatementUpload";
 import CustomSelect from "./CustomSelect";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
@@ -91,13 +92,13 @@ function useAppUser() {
 
 function Logo({ compact = false, onClick }: { compact?: boolean; onClick?: () => void }) {
   return (
-    <button className="logo" type="button" aria-label="Finzentra — на главную" onClick={onClick}>
+    <button className="logo" type="button" aria-label="Bifintra — на главную" onClick={onClick}>
       <svg className="logo__mark" viewBox="0 0 40 40" aria-hidden="true">
         <path d="M8 27.5c6.2-1 10.4-4.7 12.7-11.2 2.7 4.3 6.5 6.8 11.3 7.5" />
         <path d="m26 18 6 5.8-7.4 3" />
         <path d="M8 12.5h8.5" />
       </svg>
-      {!compact && <span>Finzentra</span>}
+      {!compact && <span>Bifintra</span>}
     </button>
   );
 }
@@ -254,7 +255,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
             Не создавайте себе <span>вторую работу</span>
           </h1>
           <p className="hero__text">
-            Finzentra помогает держать финансы бизнеса под контролем, чтобы вы меньше
+            Bifintra помогает держать финансы бизнеса под контролем, чтобы вы меньше
             времени тратили на учёт и больше — на развитие своего дела.
           </p>
           <button className="button button--primary button--large" onClick={() => navigate("register")}>
@@ -262,7 +263,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
             <Icon name="arrow" />
           </button>
         </div>
-        <div className="brand-art" aria-label="Абстрактная графика Finzentra">
+        <div className="brand-art" aria-label="Абстрактная графика Bifintra">
           <div className="brand-art__orb" />
           <svg viewBox="0 0 620 500" aria-hidden="true">
             <defs>
@@ -277,7 +278,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
             <circle cx="123" cy="358" r="16" />
             <circle cx="361" cy="182" r="11" />
           </svg>
-          <div className="brand-art__monogram">F</div>
+          <div className="brand-art__monogram">B</div>
         </div>
       </section>
 
@@ -309,7 +310,7 @@ function Home({ navigate }: { navigate: (screen: Screen) => void }) {
         <div>
           <p className="eyebrow eyebrow--light">Начните сегодня</p>
           <h2>Пора освободить время для главного</h2>
-          <p>Начните вести финансовый учёт с Finzentra — проще, понятнее и без лишней рутины.</p>
+          <p>Начните вести финансовый учёт с Bifintra — проще, понятнее и без лишней рутины.</p>
         </div>
         <button className="button button--white button--large" onClick={() => navigate("register")}>
           Зарегистрироваться
@@ -473,7 +474,7 @@ function Registration({ navigate }: { navigate: (screen: Screen) => void }) {
         </form>
         <div className={`transition-note ${success ? "transition-note--active" : ""}`}>
           <span />
-          <p>{success ? "Аккаунт создан. Переходим в Finzentra…" : "После регистрации вы автоматически перейдёте на главный экран"}</p>
+          <p>{success ? "Аккаунт создан. Переходим в Bifintra…" : "После регистрации вы автоматически перейдёте на главный экран"}</p>
         </div>
         <p className="auth-switch">
           Уже есть аккаунт?{" "}
@@ -556,7 +557,7 @@ function Login({ navigate }: { navigate: (screen: Screen) => void }) {
       <section className="auth-card">
         <header className="auth-card__header">
           <p className="auth-kicker">С возвращением</p>
-          <h1>Вход в Finzentra</h1>
+          <h1>Вход в Bifintra</h1>
           <p>Войдите в свой аккаунт, чтобы продолжить.</p>
         </header>
         {error && <div className="form-alert" role="alert">{error}</div>}
@@ -646,7 +647,7 @@ function NewPassword({ navigate }: { navigate: (screen: Screen) => void }) {
             <div className="success-state__mark">✓</div>
             <p className="auth-kicker">Готово</p>
             <h1>Пароль изменён</h1>
-            <p>Теперь вы можете войти в Finzentra с новым паролем.</p>
+            <p>Теперь вы можете войти в Bifintra с новым паролем.</p>
             <PrimaryButton onClick={() => navigate("login")}>Перейти ко входу</PrimaryButton>
           </div>
         ) : (
@@ -671,7 +672,7 @@ function NewPassword({ navigate }: { navigate: (screen: Screen) => void }) {
   );
 }
 
-type CabinetSection = "dashboard" | "operations" | "projects" | "settings";
+type CabinetSection = "dashboard" | "operations" | "projects" | "settings" | "statement";
 type CabinetIconName =
   | CabinetSection
   | "plus"
@@ -720,6 +721,7 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
         <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.5v-.1A1.7 1.7 0 0 0 8.4 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4 15a1.7 1.7 0 0 0-1.5-1H2.4V10h.1A1.7 1.7 0 0 0 4 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.46 4.2l.06.06A1.7 1.7 0 0 0 8.4 4 1.7 1.7 0 0 0 9.5 2.5v-.1h4.1v.1A1.7 1.7 0 0 0 15 4a1.7 1.7 0 0 0 1.88.26l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.5 1h.1v4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
       </>
     ),
+    statement: <path d="M7 3h7l5 5v13H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />,
     plus: <path d="M12 5v14M5 12h14" />,
     bell: (
       <>
@@ -799,6 +801,7 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
 const cabinetNavigation: { id: CabinetSection; label: string }[] = [
   { id: "dashboard", label: "Дашборд" },
   { id: "operations", label: "Операции" },
+  { id: "statement", label: "Импорт выписки" },
   { id: "projects", label: "Проекты" },
   { id: "settings", label: "Настройки" },
 ];
@@ -1911,9 +1914,9 @@ function SettingsContent({ categories, setCategories, operations }: {
 }
 
 const STORAGE_KEYS = {
-  operations: "finzentra_bolt_operations",
-  projects: "finzentra_bolt_projects",
-  categories: "finzentra_bolt_categories",
+  operations: "bifintra_bolt_operations",
+  projects: "bifintra_bolt_projects",
+  categories: "bifintra_bolt_categories",
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -1960,6 +1963,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const { user } = useAppUser();
   const userName = user.name;
   const [section, setSection] = useState<CabinetSection>("dashboard");
+  const [reviewFileName, setReviewFileName] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingOperation, setEditingOperation] = useState<Operation | null>(null);
   const [opNotice, setOpNotice] = useState("");
@@ -1982,6 +1986,10 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const [openHeaderPopover, setOpenHeaderPopover] = useState<"notifications" | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const notificationsPopoverRef = useRef<HTMLDivElement>(null);
+  const navigateSection = (nextSection: CabinetSection) => {
+    setSection(nextSection);
+    if (nextSection !== "statement") setReviewFileName(null);
+  };
 
   useEffect(() => {
     if (!openHeaderPopover && !helpOpen) return;
@@ -2014,6 +2022,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const sectionTitles: Record<CabinetSection, [string, string]> = {
     dashboard: [`Добрый день, ${userName}`, "Вот что происходит с финансами вашего бизнеса"],
     operations: ["Операции", "Контролируйте каждое движение денег"],
+    statement: ["Импорт выписки", "Загрузите выписку для проверки операций"],
     projects: ["Проекты", "Финансы бизнеса по направлениям"],
     settings: ["Настройки", "Справочники и параметры учёта"],
   };
@@ -2063,11 +2072,11 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   return (
     <div className="cabinet">
       <aside className="cabinet-sidebar">
-        <div className="cabinet-sidebar__logo"><Logo onClick={() => setSection("dashboard")} /></div>
+        <div className="cabinet-sidebar__logo"><Logo onClick={() => navigateSection("dashboard")} /></div>
         <nav className="cabinet-nav" aria-label="Разделы кабинета">
           <p>Рабочее пространство</p>
           {cabinetNavigation.map((item) => (
-            <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => setSection(item.id)}>
+            <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => navigateSection(item.id)}>
               <CabinetIcon name={item.id} /><span>{item.label}</span>
             </button>
           ))}
@@ -2081,7 +2090,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
       </aside>
 
       <main className="cabinet-main">
-        <header className="cabinet-header">
+        {!(section === "statement" && reviewFileName !== null) && <header className="cabinet-header">
           <div><p>{sectionTitles[section][1]}</p><h1>{sectionTitles[section][0]}</h1></div>
           <div className="cabinet-header__actions">
             <div className="header-popover-anchor" ref={notificationsPopoverRef}>
@@ -2102,9 +2111,9 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
                 </div>
               )}
             </div>
-            <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>
+            {section !== "statement" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
           </div>
-        </header>
+        </header>}
         <div className="cabinet-content">
           {section === "dashboard" && <DashboardContent projects={projects} operations={operations} periodType={periodType} selectedPeriod={selectedPeriod} onPeriodChange={(nextType, nextPeriod) => { setPeriodType(nextType); setSelectedPeriod(nextPeriod); }} selectedProjects={selectedProjectNames} onSelectedProjectsChange={setSelectedProjectNames} />}
           {section === "operations" && <OperationsContent operations={operations} projects={projects} onAdd={openNewOperation} onDelete={setPendingDeletion} onEdit={openEditOperation} periodType={periodType} selectedPeriod={selectedPeriod} />}
@@ -2113,6 +2122,12 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
+          {section === "statement" && (
+            <BankStatementUpload
+              onReviewStateChange={setReviewFileName}
+              onNavigateToOperations={() => navigateSection("operations")}
+            />
+          )}
           {opNotice && (
             <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
           )}
@@ -2187,7 +2202,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
 
       <nav className="bottom-nav" aria-label="Разделы кабинета">
         {cabinetNavigation.map((item) => (
-          <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => setSection(item.id)}>
+          <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => navigateSection(item.id)}>
             <CabinetIcon name={item.id} /><span>{item.label}</span>
           </button>
         ))}

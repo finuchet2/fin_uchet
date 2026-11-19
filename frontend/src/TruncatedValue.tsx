@@ -7,6 +7,9 @@ type TruncatedValueProps = {
   className?: string;
   children?: ReactNode;
   showTooltip?: boolean;
+  strictOverflow?: boolean;
+  tooltipOnHover?: boolean;
+  ariaLabel?: string;
 };
 
 export default function TruncatedValue({
@@ -15,14 +18,21 @@ export default function TruncatedValue({
   className,
   children,
   showTooltip = true,
+  strictOverflow = false,
+  tooltipOnHover = false,
+  ariaLabel,
 }: TruncatedValueProps) {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [visible, setVisible] = useState(false);
+  const hasManualTruncation = !strictOverflow && value.includes("... ₽");
+  const shouldShowTooltip = (element: HTMLSpanElement) => (
+    tooltipOnHover || hasManualTruncation || element.scrollWidth > element.clientWidth
+  );
 
   const handleMouseEnter = (event: MouseEvent<HTMLSpanElement>) => {
     if (!showTooltip) return;
     const element = event.currentTarget;
-    if (!value.includes("... ₽") && element.scrollWidth <= element.clientWidth) return;
+    if (!shouldShowTooltip(element)) return;
     const rect = element.getBoundingClientRect();
     setPosition({ x: rect.left + rect.width / 2, y: rect.top });
     setVisible(true);
@@ -35,7 +45,7 @@ export default function TruncatedValue({
     }
     if (!visible) return;
     const element = event.currentTarget;
-    if (!value.includes("... ₽") && element.scrollWidth <= element.clientWidth) {
+    if (!shouldShowTooltip(element)) {
       setVisible(false);
       return;
     }
@@ -47,6 +57,8 @@ export default function TruncatedValue({
     <>
       <span
         className={className}
+        role={ariaLabel ? "img" : undefined}
+        aria-label={ariaLabel}
         onMouseEnter={handleMouseEnter}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setVisible(false)}

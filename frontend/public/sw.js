@@ -1,4 +1,4 @@
-const CACHE_NAME = "finzentra-shell-v2"
+const CACHE_NAME = "bifintra-shell-v2"
 
 const SHELL_ASSETS = [
   "./",
@@ -23,7 +23,7 @@ self.addEventListener("install", (event) => {
       await cache.addAll(SHELL_ASSETS)
 
       const shell = await cache.match("./")
-      if (!shell) throw new Error("Finzentra app shell was not cached.")
+      if (!shell) throw new Error("Bifintra app shell was not cached.")
 
       const html = await shell.text()
       const assets = [
@@ -46,7 +46,7 @@ self.addEventListener("activate", (event) => {
           keys
 
             .filter(
-              (key) => key.startsWith("finzentra-shell-") && key !== CACHE_NAME,
+              (key) => key.startsWith("bifintra-shell-") && key !== CACHE_NAME,
             )
 
             .map((key) => caches.delete(key)),

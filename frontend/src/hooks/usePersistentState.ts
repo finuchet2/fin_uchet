@@ -1,6 +1,6 @@
 import { Dispatch, SetStateAction, useCallback, useEffect, useState } from "react";
 
-// Слой хранения перенесён из Finzentra (hooks/useFinanceStore.ts): чтение с проверкой формата,
+// Слой хранения перенесён из Bifintra (hooks/useFinanceStore.ts): чтение с проверкой формата,
 // запись в localStorage, защита от перезаписи повреждённых данных до первого изменения пользователем.
 
 const LOAD_ERROR =
@@ -20,7 +20,7 @@ function readStored<T>(key: string, fallback: T, isValid: (value: unknown) => va
     }
     return { value: parsed };
   } catch (error) {
-    console.error(`Failed to load Finzentra data from "${key}".`, error);
+    console.error(`Failed to load Bifintra data from "${key}".`, error);
     return { value: fallback, error: LOAD_ERROR };
   }
 }
@@ -30,7 +30,7 @@ function writeStored(key: string, value: unknown): boolean {
     localStorage.setItem(key, JSON.stringify(value));
     return true;
   } catch (error) {
-    console.error(`Failed to save Finzentra data to "${key}".`, error);
+    console.error(`Failed to save Bifintra data to "${key}".`, error);
     return false;
   }
 }
