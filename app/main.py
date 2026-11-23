@@ -1,24 +1,24 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth
 from app.database import engine, Base
+from app import models
+from app.routers import auth, statement_import, statement_reports
 
-# Создание таблиц в БД при запуске
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Self-Employed Finance API", version="1.0")
 
-# Настройка CORS (разрешаем запросы от фронтенда)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене лучше указать конкретный адрес, но для разработки ["*"] идеально
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключаем роутер авторизации
 app.include_router(auth.router)
+app.include_router(statement_import.router)
+app.include_router(statement_reports.router)
 
 @app.get("/")
 def root():
