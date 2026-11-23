@@ -9,9 +9,11 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import FinancialDashboard from "./FinancialDashboard";
 import BankStatementUpload from "./BankStatementUpload";
 import CustomSelect from "./CustomSelect";
@@ -19,6 +21,7 @@ import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { apiRequest } from "./api/client";
+import type { LedgerOperationInput } from "./types/import";
 
 type Screen = "home" | "register" | "login" | "recover" | "new-password" | "app";
 
@@ -798,10 +801,10 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
   );
 }
 
-const cabinetNavigation: { id: CabinetSection; label: string }[] = [
+const cabinetNavigation: { id: CabinetSection; label: string; mobileLabel?: string }[] = [
   { id: "dashboard", label: "Дашборд" },
   { id: "operations", label: "Операции" },
-  { id: "statement", label: "Импорт выписки" },
+  { id: "statement", label: "Импорт выписки", mobileLabel: "Импорт" },
   { id: "projects", label: "Проекты" },
   { id: "settings", label: "Настройки" },
 ];
@@ -819,6 +822,7 @@ type Operation = {
   periodDate: string;
   comment: string;
   amount: number;
+  paidByPersonalFunds?: boolean;
 };
 
 function formatDateInput(value: string) {
@@ -866,55 +870,110 @@ function CustomDropdown({ value, options, onChange, ariaLabel }: {
   ariaLabel: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ left: 8, top: 8, width: 240, maxHeight: 260 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const selectedOption = options.find((option) => option.value === value);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const anchor = (containerRef.current?.closest(".dashboard-select") as HTMLElement | null) ?? containerRef.current;
+    const menuEl = menuRef.current;
+    if (!anchor || !menuEl) return;
+
+    const rect = anchor.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+    const edge = 8;
+    const gap = 6;
+
+    const width = Math.min(rect.width, viewportWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.left, viewportWidth - width - edge));
+    const naturalHeight = Math.min(menuEl.scrollHeight + 2, 260);
+    const spaceBelow = viewportHeight - edge - (rect.bottom + gap);
+    const spaceAbove = rect.top - edge - gap;
+
+    let maxHeight: number;
+    let top: number;
+    if (naturalHeight <= spaceBelow || spaceBelow >= spaceAbove) {
+      maxHeight = Math.min(260, Math.max(120, Math.floor(spaceBelow)));
+      top = rect.bottom + gap;
+    } else {
+      maxHeight = Math.min(260, Math.max(120, Math.floor(spaceAbove)));
+      top = Math.max(edge, rect.top - Math.min(naturalHeight, maxHeight) - gap);
+    }
+
+    setMenuPosition({ left, top, width, maxHeight });
+  }, [open, options.length]);
 
   useEffect(() => {
     if (!open) return;
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (event.target instanceof Node && !containerRef.current?.contains(event.target)) setOpen(false);
+      const target = event.target;
+      if (target instanceof Node && !containerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
     };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    const closeOnScroll = (event: Event) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    const closeOnResize = () => setOpen(false);
     document.addEventListener("mousedown", closeOnOutsideClick);
     document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("scroll", closeOnScroll, true);
+    window.addEventListener("resize", closeOnResize);
     return () => {
       document.removeEventListener("mousedown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", closeOnResize);
     };
   }, [open]);
 
-  return (
-    <div className="custom-dropdown" ref={containerRef}>
-      <button
-        type="button"
-        className="custom-dropdown__trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span>{selectedOption?.label ?? options[0]?.label ?? "Нет вариантов"}</span>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
-      </button>
-      {open && (
-        <div className="custom-dropdown__menu" role="listbox" aria-label={ariaLabel}>
-          {options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              className={option.value === value ? "is-selected" : ""}
-              onClick={() => { onChange(option.value); setOpen(false); }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
+  const portalMenu = open ? (
+    <div
+      ref={menuRef}
+      className="custom-dropdown__menu custom-dropdown__menu--portal"
+      role="listbox"
+      aria-label={ariaLabel}
+      style={menuPosition}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="option"
+          aria-selected={option.value === value}
+          className={option.value === value ? "is-selected" : ""}
+          onClick={() => { onChange(option.value); setOpen(false); }}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
+  ) : null;
+
+  return (
+    <>
+      <div className="custom-dropdown" ref={containerRef}>
+        <button
+          type="button"
+          className="custom-dropdown__trigger"
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span>{selectedOption?.label ?? options[0]?.label ?? "Нет вариантов"}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+        </button>
+      </div>
+      {portalMenu && typeof document !== "undefined" ? createPortal(portalMenu, document.body) : null}
+    </>
   );
 }
 
@@ -935,7 +994,9 @@ function DateField({ label, value, onChange, hint, onInvalid, error, alignCalend
   alignCalendarRight?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [pickerPos, setPickerPos] = useState({ left: 8, top: 8 });
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const selectedDate = parseDateInput(value) ?? new Date();
     return new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
@@ -955,21 +1016,112 @@ function DateField({ label, value, onChange, hint, onInvalid, error, alignCalend
     setIsOpen(false);
   };
 
+  useLayoutEffect(() => {
+    if (!isOpen || !containerRef.current || !pickerRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const pickerRect = pickerRef.current.getBoundingClientRect();
+    const edge = 8;
+    const gap = 8;
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+
+    const preferredLeft = alignCalendarRight && viewportWidth >= 768
+      ? rect.right - pickerRect.width
+      : rect.left;
+    const left = Math.max(edge, Math.min(preferredLeft, viewportWidth - pickerRect.width - edge));
+
+    let top: number;
+    if (rect.bottom + gap + pickerRect.height <= viewportHeight - edge) {
+      top = rect.bottom + gap;
+    } else if (rect.top - gap - pickerRect.height >= edge) {
+      top = rect.top - gap - pickerRect.height;
+    } else {
+      top = Math.max(edge, viewportHeight - pickerRect.height - edge);
+    }
+
+    setPickerPos({ left, top });
+  }, [isOpen, alignCalendarRight, visibleMonth]);
+
   useEffect(() => {
     if (!isOpen) return;
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (event.target instanceof Node && !containerRef.current?.contains(event.target)) setIsOpen(false);
+      const target = event.target;
+      if (target instanceof Node && !containerRef.current?.contains(target) && !pickerRef.current?.contains(target)) {
+        setIsOpen(false);
+      }
     };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") setIsOpen(false);
     };
+    const closeOnScroll = (event: Event) => {
+      if (event.target instanceof Node && pickerRef.current?.contains(event.target)) return;
+      setIsOpen(false);
+    };
+    const closeOnResize = () => setIsOpen(false);
     document.addEventListener("pointerdown", closeOnOutsideClick);
     document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("scroll", closeOnScroll, true);
+    window.addEventListener("resize", closeOnResize);
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", closeOnResize);
     };
   }, [isOpen]);
+
+  const portalPicker = isOpen ? (
+    <div
+      ref={pickerRef}
+      className="date-picker date-picker--portal"
+      role="dialog"
+      aria-label={`Выбор даты: ${label}`}
+      style={pickerPos}
+    >
+      <div className="date-picker__header">
+        <button type="button" aria-label="Предыдущий месяц" onClick={() => setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))}>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4.5-5 5 5 5" /></svg>
+        </button>
+        <strong>{monthTitle.charAt(0).toLocaleUpperCase("ru-RU") + monthTitle.slice(1)}</strong>
+        <button type="button" aria-label="Следующий месяц" onClick={() => setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))}>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7.5 4.5 5 5-5 5" /></svg>
+        </button>
+      </div>
+      <div className="date-picker__grid">
+        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => (
+          <span key={day} className="date-picker__weekday" aria-hidden="true">{day}</span>
+        ))}
+        {calendarDays.map((date) => {
+          const dateValue = formatDateValue(date);
+          const isSelected = selectedDate?.getTime() === date.getTime();
+          const isToday = today.getFullYear() === date.getFullYear() && today.getMonth() === date.getMonth() && today.getDate() === date.getDate();
+          const isOutsideMonth = date.getMonth() !== visibleMonth.getMonth();
+          return (
+            <button
+              key={dateValue}
+              type="button"
+              aria-label={date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
+              aria-pressed={isSelected}
+              className={[
+                "date-picker__day",
+                isSelected ? "is-selected" : "",
+                isToday && !isSelected ? "is-today" : "",
+                isOutsideMonth ? "is-outside" : "",
+              ].filter(Boolean).join(" ")}
+              onClick={() => selectDate(date)}
+            >
+              {date.getDate()}
+            </button>
+          );
+        })}
+      </div>
+      <div className="date-picker__footer">
+        <button type="button" onClick={() => onChange("")}>Очистить</button>
+        <button type="button" onClick={() => selectDate(today)}>Сегодня</button>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div className="drawer-field">
@@ -995,52 +1147,8 @@ function DateField({ label, value, onChange, hint, onInvalid, error, alignCalend
         <button type="button" className="date-input__calendar" aria-label={`Открыть календарь: ${label}`} aria-expanded={isOpen} onClick={openCalendar}>
           <CabinetIcon name="calendar" />
         </button>
-        {isOpen && (
-          <div className={`date-picker${alignCalendarRight ? " date-picker--align-right" : ""}`} role="dialog" aria-label={`Выбор даты: ${label}`}>
-            <div className="date-picker__header">
-              <button type="button" aria-label="Предыдущий месяц" onClick={() => setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))}>
-                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4.5-5 5 5 5" /></svg>
-              </button>
-              <strong>{monthTitle.charAt(0).toLocaleUpperCase("ru-RU") + monthTitle.slice(1)}</strong>
-              <button type="button" aria-label="Следующий месяц" onClick={() => setVisibleMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))}>
-                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7.5 4.5 5 5-5 5" /></svg>
-              </button>
-            </div>
-            <div className="date-picker__grid">
-              {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((day) => (
-                <span key={day} className="date-picker__weekday" aria-hidden="true">{day}</span>
-              ))}
-              {calendarDays.map((date) => {
-                const dateValue = formatDateValue(date);
-                const isSelected = selectedDate?.getTime() === date.getTime();
-                const isToday = today.getFullYear() === date.getFullYear() && today.getMonth() === date.getMonth() && today.getDate() === date.getDate();
-                const isOutsideMonth = date.getMonth() !== visibleMonth.getMonth();
-                return (
-                  <button
-                    key={dateValue}
-                    type="button"
-                    aria-label={date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
-                    aria-pressed={isSelected}
-                    className={[
-                      "date-picker__day",
-                      isSelected ? "is-selected" : "",
-                      isToday && !isSelected ? "is-today" : "",
-                      isOutsideMonth ? "is-outside" : "",
-                    ].filter(Boolean).join(" ")}
-                    onClick={() => selectDate(date)}
-                  >
-                    {date.getDate()}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="date-picker__footer">
-              <button type="button" onClick={() => onChange("")}>Очистить</button>
-              <button type="button" onClick={() => selectDate(today)}>Сегодня</button>
-            </div>
-          </div>
-        )}
       </div>
+      {portalPicker && typeof document !== "undefined" ? createPortal(portalPicker, document.body) : null}
       {error && <p className="drawer-field__error">{error}</p>}
       <p className="drawer-field__hint">{hint}</p>
     </div>
@@ -1262,7 +1370,14 @@ function OperationsContent({ operations, projects, onAdd, onDelete, onEdit, peri
                       <td className="operations-table__date"><TruncatedValue value={op.date} className="operations-table__date-value" /></td>
                       <td className="operations-table__date"><TruncatedValue value={op.periodDate} className="operations-table__date-value" /></td>
                       <td className="operations-table__category"><TruncatedValue value={op.category} className="operations-table__category-value" /></td>
-                      <td className="operations-table__project"><TruncatedValue value={op.project} className="project-badge" /></td>
+                      <td className="operations-table__project">
+                        <TruncatedValue value={op.project} className="project-badge" />
+                        {op.paidByPersonalFunds && (
+                          <span className="personal-funds-badge" title="Оплачено личными средствами (учитывается в P&L)">
+                            Личные средства
+                          </span>
+                        )}
+                      </td>
                       <td className="operations-table__comment"><TruncatedValue value={op.comment} className="operations-table__comment-value" /></td>
                       <td className={`operations-table__sum operations-table__sum--${op.type === "income" ? "income" : "expense"}${Math.abs(op.amount) >= 1_000_000 ? " operations-table__sum--large" : ""}`}>
                         <TruncatedValue value={formatAmount(op.amount)} tooltipValue={formatThresholdCurrency(op.amount, true).exact} className="operations-table__sum-value" showTooltip={Math.abs(op.amount) >= currencyTruncationThreshold} />
@@ -1301,6 +1416,9 @@ function OperationsContent({ operations, projects, onAdd, onDelete, onEdit, peri
                           </div>
                           <div className="operation-mobile-card__bottom">
                             <span className="project-badge">{op.project}</span>
+                            {op.paidByPersonalFunds && (
+                              <span className="personal-funds-badge">Личные средства</span>
+                            )}
                             <TruncatedValue value={op.comment} className="operation-mobile-card__comment" />
                           </div>
                         </div>
@@ -1391,6 +1509,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
       periodDate,
       comment: comment.trim(),
       amount: type === "income" ? numeric : -numeric,
+      ...(operation?.paidByPersonalFunds ? { paidByPersonalFunds: true } : {}),
     };
     onSaved(op);
   };
@@ -1930,7 +2049,8 @@ function isOperation(value: unknown): value is Operation {
     && typeof value.date === "string"
     && typeof value.periodDate === "string"
     && typeof value.comment === "string"
-    && typeof value.amount === "number" && Number.isFinite(value.amount);
+    && typeof value.amount === "number" && Number.isFinite(value.amount)
+    && (value.paidByPersonalFunds === undefined || typeof value.paidByPersonalFunds === "boolean");
 }
 
 function isDirectoryProject(value: unknown): value is DirectoryProject {
@@ -2115,6 +2235,9 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
           </div>
         </header>}
         <div className="cabinet-content">
+          {opNotice && (
+            <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
+          )}
           {section === "dashboard" && <DashboardContent projects={projects} operations={operations} periodType={periodType} selectedPeriod={selectedPeriod} onPeriodChange={(nextType, nextPeriod) => { setPeriodType(nextType); setSelectedPeriod(nextPeriod); }} selectedProjects={selectedProjectNames} onSelectedProjectsChange={setSelectedProjectNames} />}
           {section === "operations" && <OperationsContent operations={operations} projects={projects} onAdd={openNewOperation} onDelete={setPendingDeletion} onEdit={openEditOperation} periodType={periodType} selectedPeriod={selectedPeriod} />}
           {section === "projects" && <ProjectsContent projects={projects} setProjects={setProjects} onProjectRenamed={(previousName, nextName) => {
@@ -2124,12 +2247,37 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
           {section === "statement" && (
             <BankStatementUpload
+              projects={projects}
+              categories={liveCategories}
+              existingOperations={operations}
+              onImportConfirmed={(importedOps: LedgerOperationInput[]) => {
+                if (importedOps.length === 0) return;
+                setOperations((current) => [...importedOps, ...current]);
+                const projectCountIncrements = new Map<string, number>();
+                for (const op of importedOps) {
+                  if (op.project) {
+                    projectCountIncrements.set(
+                      op.project,
+                      (projectCountIncrements.get(op.project) ?? 0) + 1,
+                    );
+                  }
+                }
+                if (projectCountIncrements.size > 0) {
+                  setProjects((current) =>
+                    current.map((project) => {
+                      const delta = projectCountIncrements.get(project.name) ?? 0;
+                      return delta > 0
+                        ? { ...project, operations: project.operations + delta }
+                        : project;
+                    }),
+                  );
+                }
+                setOpNotice(`Импортировано операций в учёт: ${importedOps.length}`);
+                window.setTimeout(() => setOpNotice(""), 3600);
+              }}
               onReviewStateChange={setReviewFileName}
               onNavigateToOperations={() => navigateSection("operations")}
             />
-          )}
-          {opNotice && (
-            <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
           )}
         </div>
         {pendingDeletion && (
@@ -2203,11 +2351,13 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
       <nav className="bottom-nav" aria-label="Разделы кабинета">
         {cabinetNavigation.map((item) => (
           <button key={item.id} className={section === item.id ? "is-active" : ""} onClick={() => navigateSection(item.id)}>
-            <CabinetIcon name={item.id} /><span>{item.label}</span>
+            <CabinetIcon name={item.id} /><span>{item.mobileLabel ?? item.label}</span>
           </button>
         ))}
       </nav>
-      <button className="mobile-add" aria-label="Добавить операцию" onClick={openNewOperation}><CabinetIcon name="plus" /></button>
+      {section !== "statement" && (
+        <button className="mobile-add" aria-label="Добавить операцию" onClick={openNewOperation}><CabinetIcon name="plus" /></button>
+      )}
     </div>
   );
 }

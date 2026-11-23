@@ -1,83 +1,131 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
-import {
-  AlertCircle,
-  ArrowRight,
-  CheckCircle2,
-  CloudUpload,
-  FileSpreadsheet,
-  LoaderCircle,
-  ShieldCheck,
-  Trash2,
-} from "lucide-react";
-import BankStatementReview from "./BankStatementReview";
+import { useEffect, useRef, useState } from "react"
+import { CheckCircle2, FileSpreadsheet, ShieldCheck } from "lucide-react"
+import BankStatementReview from "./BankStatementReview"
+import { importApi } from "./api/importApi"
+import StatementDropzone, {
+  type DropzoneStatus,
+} from "./features/statement-import/StatementDropzone"
+import { validateStatementFile } from "./services/statementParser"
+import type {
+  ExistingLedgerOperation,
+  ImportBatch,
+  ImportCategoryBuckets,
+  ImportProjectOption,
+  LedgerOperationInput,
+} from "./types/import"
 
-type UploadState = "default" | "dragging" | "error" | "loading" | "ready";
-
-function formatFileSize(size: number) {
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} КБ`;
-  return `${(size / (1024 * 1024)).toFixed(1).replace(".", ",")} МБ`;
+interface BankStatementUploadProps {
+  projects: ImportProjectOption[]
+  categories: ImportCategoryBuckets
+  existingOperations: ExistingLedgerOperation[]
+  onImportConfirmed: (ops: LedgerOperationInput[]) => void
+  onReviewStateChange: (fileName: string | null) => void
+  onNavigateToOperations: () => void
 }
 
 export default function BankStatementUpload({
+  projects,
+  categories,
+  existingOperations,
+  onImportConfirmed,
   onReviewStateChange,
   onNavigateToOperations,
-}: {
-  onReviewStateChange: (fileName: string | null) => void;
-  onNavigateToOperations: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [state, setState] = useState<UploadState>("default");
-  const [file, setFile] = useState<{ name: string; size: number } | null>(null);
-  const [isReviewing, setIsReviewing] = useState(false);
+}: BankStatementUploadProps) {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [dropzoneStatus, setDropzoneStatus] = useState<DropzoneStatus>("default")
+  const [errorMessage, setErrorMessage] = useState("")
+  const [preparedBatch, setPreparedBatch] = useState<ImportBatch | null>(null)
+  const [isReviewing, setIsReviewing] = useState(false)
+  const requestIdRef = useRef(0)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    if (state !== "loading") return;
-    const timer = window.setTimeout(() => setState("ready"), 850);
-    return () => window.clearTimeout(timer);
-  }, [state]);
-
-  const handleFile = (selectedFile: File) => {
-    const extension = selectedFile.name.split(".").pop()?.toLowerCase();
-    if (extension !== "csv" && extension !== "xlsx") {
-      setFile(null);
-      setState("error");
-      return;
+    return () => {
+      abortControllerRef.current?.abort()
     }
-    setFile({ name: selectedFile.name, size: selectedFile.size });
-    setState("loading");
-  };
+  }, [])
+
+  const handleFileSelect = async (file: File) => {
+    abortControllerRef.current?.abort()
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+
+    const validationError = validateStatementFile(file)
+    if (validationError) {
+      setSelectedFile(null)
+      setPreparedBatch(null)
+      setErrorMessage(validationError)
+      setDropzoneStatus("error")
+      return
+    }
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    setSelectedFile(file)
+    setPreparedBatch(null)
+    setErrorMessage("")
+    setDropzoneStatus("loading")
+
+    try {
+      const batch = await importApi.uploadStatement({
+        file,
+        projects,
+        categories,
+        existingOperations,
+        signal: controller.signal,
+      })
+      if (requestIdRef.current !== requestId) return
+      setPreparedBatch(batch)
+      setDropzoneStatus("ready")
+    } catch (error) {
+      if (controller.signal.aborted || requestIdRef.current !== requestId) return
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "object" &&
+              error !== null &&
+              "message" in error &&
+              typeof (error as { message: unknown }).message === "string"
+            ? (error as { message: string }).message
+            : "Не удалось распознать выписку. Проверьте формат столбцов."
+      setSelectedFile(null)
+      setPreparedBatch(null)
+      setErrorMessage(message)
+      setDropzoneStatus("error")
+    }
+  }
 
   const removeFile = () => {
-    setFile(null);
-    setState("default");
-    if (inputRef.current) inputRef.current.value = "";
-  };
+    abortControllerRef.current?.abort()
+    requestIdRef.current += 1
+    setSelectedFile(null)
+    setPreparedBatch(null)
+    setErrorMessage("")
+    setDropzoneStatus("default")
+  }
 
   const startAnotherUpload = () => {
-    removeFile();
-    setIsReviewing(false);
-    onReviewStateChange(null);
-  };
+    removeFile()
+    setIsReviewing(false)
+    onReviewStateChange(null)
+  }
 
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const droppedFile = event.dataTransfer.files[0];
-    if (droppedFile) handleFile(droppedFile);
-    else setState("default");
-  };
-
-  if (isReviewing) {
+  if (isReviewing && preparedBatch) {
     return (
       <BankStatementReview
-        fileName={file?.name ?? ""}
+        key={preparedBatch.id}
+        batch={preparedBatch}
+        projects={projects}
+        categories={categories}
+        onImportConfirmed={onImportConfirmed}
         onUploadAnother={startAnotherUpload}
         onNavigateToOperations={onNavigateToOperations}
         onBack={() => {
-          setIsReviewing(false);
-          onReviewStateChange(null);
+          setIsReviewing(false)
+          onReviewStateChange(null)
         }}
       />
-    );
+    )
   }
 
   return (
@@ -97,83 +145,38 @@ export default function BankStatementUpload({
               <span className="statement-step">ШАГ 01</span>
               <h3>Файл выписки</h3>
             </div>
-            <span className="statement-format-badge"><ShieldCheck size={15} /> Безопасная загрузка</span>
+            <span className="statement-format-badge">
+              <ShieldCheck size={15} /> Безопасная загрузка
+            </span>
           </div>
 
-          {state === "ready" || state === "loading" ? (
-            <div className={`statement-file ${state === "loading" ? "is-loading" : ""}`}>
-              <div className="statement-file__icon"><FileSpreadsheet size={25} strokeWidth={1.8} /></div>
-              <div className="statement-file__details">
-                <strong title={file?.name}>{file?.name}</strong>
-                <span>{file ? formatFileSize(file.size) : ""} <i /> {state === "loading" ? "Обработка файла..." : "Готов к проверке"}</span>
-                {state === "loading" && <div className="statement-progress"><span /></div>}
-              </div>
-              {state === "loading" ? (
-                <LoaderCircle className="statement-file__spinner" size={20} aria-label="Загрузка" />
-              ) : (
-                <button className="statement-icon-button" type="button" aria-label="Удалить файл" onClick={removeFile}>
-                  <Trash2 size={17} />
-                </button>
-              )}
-              {state === "ready" && (
-                <button
-                  type="button"
-                  className="statement-continue"
-                  onClick={() => {
-                    setIsReviewing(true);
-                    onReviewStateChange(file?.name ?? "");
-                  }}
-                >
-                  Перейти к проверке операций <ArrowRight size={17} />
-                </button>
-              )}
-            </div>
-          ) : (
-            <div
-              className={`statement-dropzone ${state === "dragging" ? "is-dragging" : ""} ${state === "error" ? "is-error" : ""}`}
-              onDragEnter={(event) => { event.preventDefault(); setState("dragging"); }}
-              onDragOver={(event) => { event.preventDefault(); setState("dragging"); }}
-              onDragLeave={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                  setState(state === "error" ? "error" : "default");
-                }
-              }}
-              onDrop={onDrop}
-            >
-              <div className="statement-dropzone__icon">
-                {state === "error" ? <AlertCircle size={28} /> : <CloudUpload size={30} strokeWidth={1.7} />}
-              </div>
-              <h4>{state === "error" ? "Не удалось загрузить файл" : state === "dragging" ? "Отпустите файл, чтобы загрузить" : "Перетащите файл сюда"}</h4>
-              <p>
-                {state === "error"
-                  ? "Этот формат не поддерживается. Выберите файл CSV или XLSX."
-                  : "Перетащите файл сюда или выберите на компьютере. Поддерживаются форматы .CSV и .XLSX"}
-              </p>
-              <input
-                ref={inputRef}
-                className="statement-file-input"
-                type="file"
-                accept=".csv,.xlsx"
-                aria-label="Выбрать файл банковской выписки"
-                onChange={(event) => {
-                  const selectedFile = event.currentTarget.files?.[0];
-                  if (selectedFile) handleFile(selectedFile);
-                  event.currentTarget.value = "";
-                }}
-              />
-              <button type="button" className="statement-choose" onClick={() => inputRef.current?.click()}>
-                Выбрать файл
-              </button>
-              {state === "error" && (
-                <span className="statement-error-note" role="alert">
-                  <AlertCircle size={14} /> Поддерживаются только файлы .CSV и .XLSX
-                </span>
-              )}
-            </div>
-          )}
+          <StatementDropzone
+            file={selectedFile ? { name: selectedFile.name, size: selectedFile.size } : null}
+            status={dropzoneStatus}
+            errorMessage={errorMessage}
+            onFileSelect={handleFileSelect}
+            onRemoveFile={removeFile}
+            onProceed={() => {
+              if (!preparedBatch) return
+              setIsReviewing(true)
+              onReviewStateChange(preparedBatch.fileName)
+            }}
+            onDraggingChange={(dragging) => {
+              if (dragging) {
+                setDropzoneStatus("dragging")
+              } else {
+                setDropzoneStatus(errorMessage ? "error" : "default")
+              }
+            }}
+          />
+
           <div className="statement-upload-card__foot">
-            <span><CheckCircle2 size={16} /> Поддерживаются выписки любых банков в форматах CSV и XLSX</span>
-            <span>CSV <i /> XLSX</span>
+            <span>
+              <CheckCircle2 size={16} /> Поддерживаются выписки любых банков в форматах CSV и XLSX
+            </span>
+            <span>
+              CSV <i /> XLSX
+            </span>
           </div>
         </div>
 
@@ -181,23 +184,47 @@ export default function BankStatementUpload({
           <div className="statement-aside__art">
             <div className="statement-aside__glow" />
             <div className="statement-aside__sheet">
-              <div className="statement-aside__sheet-mark"><FileSpreadsheet size={25} /></div>
+              <div className="statement-aside__sheet-mark">
+                <FileSpreadsheet size={25} />
+              </div>
               <div className="statement-aside__line statement-aside__line--wide" />
               <div className="statement-aside__line" />
-              <div className="statement-aside__row"><i /><i /><i /></div>
-              <div className="statement-aside__row"><i /><i /><i /></div>
-              <div className="statement-aside__row"><i /><i /><i /></div>
+              <div className="statement-aside__row">
+                <i />
+                <i />
+                <i />
+              </div>
+              <div className="statement-aside__row">
+                <i />
+                <i />
+                <i />
+              </div>
+              <div className="statement-aside__row">
+                <i />
+                <i />
+                <i />
+              </div>
             </div>
-            <span className="statement-aside__check"><CheckCircle2 size={20} /></span>
+            <span className="statement-aside__check">
+              <CheckCircle2 size={20} />
+            </span>
           </div>
           <div className="statement-aside__copy">
             <span className="statement-step">ВСЁ ПРОСТО</span>
             <h3>От выписки к учёту</h3>
             <p>Загрузите файл, проверьте распознанные операции и добавьте их в финансовый учёт.</p>
           </div>
-          <div className="statement-aside__privacy"><ShieldCheck size={17} /><span><strong>Ваши данные под контролем</strong><small>Операции попадут в финансовую отчётность только после вашей проверки и подтверждения</small></span></div>
+          <div className="statement-aside__privacy">
+            <ShieldCheck size={17} />
+            <span>
+              <strong>Ваши данные под контролем</strong>
+              <small>
+                Операции попадут в финансовую отчётность только после вашей проверки и подтверждения
+              </small>
+            </span>
+          </div>
         </aside>
       </div>
     </section>
-  );
+  )
 }

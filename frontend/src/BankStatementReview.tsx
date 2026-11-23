@@ -1,898 +1,918 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react"
+import { ArrowLeft, Check, CheckCheck, FileSpreadsheet, Info, Search, X } from "lucide-react"
+import TruncatedValue from "./TruncatedValue"
+import { importApi, type OperationUpdatePatch } from "./api/importApi"
+import DuplicateComparisonPopover, {
+  type PopoverAnchorRect,
+} from "./features/statement-import/DuplicateComparisonPopover"
+import ImportResultScreen from "./features/statement-import/ImportResultScreen"
+import ImportStickyActionBar from "./features/statement-import/ImportStickyActionBar"
+import ImportedOperationCard from "./features/statement-import/ImportedOperationCard"
+import ImportedOperationRow from "./features/statement-import/ImportedOperationRow"
+import PreprocessingSummary from "./features/statement-import/PreprocessingSummary"
+import { computeBatchSummary } from "./services/statementParser"
 import {
-  AlertCircle,
-  ArrowLeft,
-  ArrowLeftRight,
-  ArrowRight,
-  Check,
-  CheckCheck,
-  CircleCheck,
-  FileSpreadsheet,
-  Info,
-  Minus,
-  ShieldCheck,
-  Upload,
-  X,
-} from "lucide-react";
-import { createPortal } from "react-dom";
-import CustomSelect from "./CustomSelect";
-import TruncatedValue from "./TruncatedValue";
+  DEFAULT_FALLBACK_CATEGORIES,
+  IMPORT_OPERATION_TYPES,
+  OWNERSHIP_OPTIONS,
+  formatRuCurrency,
+  mapImportedOperationToLedger,
+  type ImportBatch,
+  type ImportCategoryBuckets,
+  type ImportConfirmResult,
+  type ImportOperationType,
+  type ImportProjectOption,
+  type ImportQuickFilter,
+  type ImportedOperation,
+  type LedgerOperationInput,
+  type ManualCorrection,
+  type OwnershipStatus,
+} from "./types/import"
 
-const operationTypes = [
-  "Доход",
-  "Расход",
-  "Перевод между собственными счетами",
-  "Возврат от поставщика",
-  "Возврат покупателю",
-  "Банковская комиссия",
-  "Налоговый платёж",
-  "Получение кредита",
-  "Погашение кредита",
-  "Снятие наличных",
-  "Неопределённая операция",
-];
-
-const categories = [
-  "Аренда",
-  "Закупка товаров",
-  "Упаковка",
-  "Логистика и доставка",
-  "Реклама",
-  "Интернет и связь",
-  "Коммунальные услуги",
-  "Банковские комиссии",
-  "Налоги",
-  "Подписки и сервисы",
-  "Прочие расходы",
-  "Выручка от продаж",
-  "Неопределённое",
-];
-
-const projects = ["Основное направление", "Интернет-магазин", "Розница", "Без проекта"];
-const ownershipOptions = ["Бизнес", "Личное", "Неопределённое"];
-const operationTypeOptions = operationTypes.map((value) => ({ value, label: value }));
-const categoryOptions = categories.map((value) => ({ value, label: value }));
-const projectOptions = projects.map((value) => ({ value, label: value }));
-const ownershipSelectOptions = ownershipOptions.map((value) => ({ value, label: value }));
-
-type OperationStatus = "review" | "confirmed" | "excluded";
-type QuickFilter = "all" | "review" | "duplicates" | "excluded";
-type AmountKind = "income" | "expense" | "transfer";
-type DuplicateKind = "exact" | "possible";
-type SuggestedField = "type" | "category" | "ownership";
-
-type RecognitionSuggestion = {
-  confidence: number;
-  reason: string;
-};
-
-type ImportedOperation = {
-  id: string;
-  date: string;
-  counterparty: string;
-  purpose: string;
-  amount: number;
-  amountKind: AmountKind;
-  type: string;
-  category: string;
-  project: string;
-  ownership: string;
-  suggestions?: Partial<Record<SuggestedField, RecognitionSuggestion>>;
-  duplicateKind?: DuplicateKind;
-  duplicateOf?: string;
-  status: OperationStatus;
-};
-
-const initialOperations: ImportedOperation[] = [
-  {
-    id: "op-1",
-    date: "18.11.2026",
-    counterparty: "ООО «Вектор Трейд»",
-    purpose: "Оплата по счёту № ВТ-1847 за партию аксессуаров",
-    amount: 124800,
-    amountKind: "expense",
-    type: "Расход",
-    category: "Закупка товаров",
-    project: "Интернет-магазин",
-    ownership: "Бизнес",
-    suggestions: {
-      category: { confidence: 94, reason: "Распознано по назначению платежа" },
-    },
-    status: "review",
-  },
-  {
-    id: "op-2",
-    date: "17.11.2026",
-    counterparty: "АО «Т-Банк»",
-    purpose: "Комиссия за обслуживание расчётного счёта",
-    amount: 1490,
-    amountKind: "expense",
-    type: "Банковская комиссия",
-    category: "Банковские комиссии",
-    project: "Основное направление",
-    ownership: "Бизнес",
-    suggestions: {
-      category: { confidence: 98, reason: "На основе ваших прошлых операций с этим контрагентом" },
-    },
-    status: "review",
-  },
-  {
-    id: "op-3",
-    date: "17.11.2026",
-    counterparty: "ИП Смирнова Анна Олеговна",
-    purpose: "Поступление оплаты по заказу № 48391, интернет-магазин",
-    amount: 386400,
-    amountKind: "income",
-    type: "Доход",
-    category: "Выручка от продаж",
-    project: "Интернет-магазин",
-    ownership: "Бизнес",
-    suggestions: {
-      type: { confidence: 96, reason: "Распознано по назначению платежа" },
-      category: { confidence: 96, reason: "Распознано по назначению платежа" },
-    },
-    status: "review",
-  },
-  {
-    id: "op-4",
-    date: "16.11.2026",
-    counterparty: "ООО «Складские решения»",
-    purpose: "Аренда складского помещения за ноябрь 2026 года",
-    amount: 68000,
-    amountKind: "expense",
-    type: "Расход",
-    category: "Аренда",
-    project: "Основное направление",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-5",
-    date: "15.11.2026",
-    counterparty: "ООО «Курьерская служба 24»",
-    purpose: "Доставка заказов покупателям, реестр № 11-15/204",
-    amount: 32750,
-    amountKind: "expense",
-    type: "Расход",
-    category: "Логистика и доставка",
-    project: "Интернет-магазин",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-6",
-    date: "15.11.2026",
-    counterparty: "ООО «Курьерская служба 24»",
-    purpose: "Оплата доставки заказов по реестру № 11-15/204",
-    amount: 32750,
-    amountKind: "expense",
-    type: "Расход",
-    category: "Логистика и доставка",
-    project: "Интернет-магазин",
-    ownership: "Бизнес",
-    duplicateKind: "possible",
-    duplicateOf: "op-5",
-    status: "review",
-  },
-  {
-    id: "op-7",
-    date: "14.11.2026",
-    counterparty: "ФНС России",
-    purpose: "Единый налоговый платёж за октябрь 2026 года",
-    amount: 24800,
-    amountKind: "expense",
-    type: "Налоговый платёж",
-    category: "Налоги",
-    project: "Основное направление",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-8",
-    date: "13.11.2026",
-    counterparty: "Перевод между счетами",
-    purpose: "Перевод на накопительный счёт •• 2841",
-    amount: 100000,
-    amountKind: "transfer",
-    type: "Перевод между собственными счетами",
-    category: "Прочие расходы",
-    project: "Без проекта",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-9",
-    date: "12.11.2026",
-    counterparty: "ООО «ПакСнаб Поволжье»",
-    purpose: "Возврат за недопоставленные коробки по накладной 9082-11/26",
-    amount: 8350,
-    amountKind: "income",
-    type: "Возврат от поставщика",
-    category: "Упаковка",
-    project: "Интернет-магазин",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-10",
-    date: "11.11.2026",
-    counterparty: "ООО «Связь для бизнеса»",
-    purpose: "Интернет и корпоративная связь за ноябрь",
-    amount: 4290,
-    amountKind: "expense",
-    type: "Расход",
-    category: "Интернет и связь",
-    project: "Основное направление",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-11",
-    date: "10.11.2026",
-    counterparty: "ООО «Маркетплейс Волга»",
-    purpose: "Выплата за реализованные товары по отчёту № 144981",
-    amount: 217650,
-    amountKind: "income",
-    type: "Доход",
-    category: "Выручка от продаж",
-    project: "Интернет-магазин",
-    ownership: "Бизнес",
-    status: "review",
-  },
-  {
-    id: "op-12",
-    date: "09.11.2026",
-    counterparty: "ООО «Северный региональный маркет»",
-    purpose: "Оплата оптовой поставки по контракту № СРМ-2026/118",
-    amount: 128450900.5,
-    amountKind: "income",
-    type: "Доход",
-    category: "Неопределённое",
-    project: "Основное направление",
-    ownership: "Неопределённое",
-    status: "review",
-  },
-  {
-    id: "op-13",
-    date: "08.11.2026",
-    counterparty: "ООО «ТехноПром Групп»",
-    purpose: "Авансовый платёж за промышленное оборудование по договору № ТП-809",
-    amount: 1540000000,
-    amountKind: "expense",
-    type: "Неопределённая операция",
-    category: "Прочие расходы",
-    project: "Основное направление",
-    ownership: "Бизнес",
-    suggestions: {
-      category: { confidence: 61, reason: "Предложено по назначению платежа, но назначение недостаточно конкретное" },
-    },
-    status: "review",
-  },
-  {
-    id: "op-14",
-    date: "17.11.2026",
-    counterparty: "АО «Т-Банк»",
-    purpose: "Комиссия за обслуживание расчётного счёта",
-    amount: 1490,
-    amountKind: "expense",
-    type: "Банковская комиссия",
-    category: "Банковские комиссии",
-    project: "Основное направление",
-    ownership: "Бизнес",
-    duplicateKind: "exact",
-    duplicateOf: "op-2",
-    status: "review",
-  },
-];
-
-const currencyFormatter = new Intl.NumberFormat("ru-RU", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-
-function formatCurrency(amount: number) {
-  return `${currencyFormatter.format(amount)} ₽`;
+interface BankStatementReviewProps {
+  batch: ImportBatch
+  projects: ImportProjectOption[]
+  categories: ImportCategoryBuckets
+  onImportConfirmed: (ops: LedgerOperationInput[]) => void
+  onBack: () => void
+  onUploadAnother: () => void
+  onNavigateToOperations: () => void
 }
 
-function formatOperationCount(count: number) {
-  const lastTwoDigits = count % 100;
-  const lastDigit = count % 10;
-  const word = lastTwoDigits >= 11 && lastTwoDigits <= 14
-    ? "операций"
-    : lastDigit === 1
-      ? "операция"
-      : lastDigit >= 2 && lastDigit <= 4
-        ? "операции"
-        : "операций";
-  return `${count} ${word}`;
-}
-
-const filterLabels: { id: QuickFilter; label: string }[] = [
+const FILTER_TABS: Array<{ id: ImportQuickFilter; label: string }> = [
   { id: "all", label: "Все операции" },
   { id: "review", label: "Требуют проверки" },
+  { id: "confirmed", label: "Подтверждённые" },
   { id: "duplicates", label: "Дубликаты" },
   { id: "excluded", label: "Исключённые" },
-];
+]
 
-function isUncertainValue(value: string) {
-  return value === "Неопределённое" || value === "Неопределённая операция";
-}
+const OPERATION_TYPE_OPTIONS = IMPORT_OPERATION_TYPES.map((value) => ({ value, label: value }))
+const OWNERSHIP_SELECT_OPTIONS = OWNERSHIP_OPTIONS.map((value) => ({ value, label: value }))
 
-function FieldConfidence({ suggestion }: { suggestion?: RecognitionSuggestion }) {
-  if (!suggestion) return null;
-  const confidenceLabel = suggestion.confidence >= 90
-    ? "Высокая уверенность"
-    : suggestion.confidence > 70
-      ? "Средняя уверенность"
-      : "Требует проверки";
-  const tooltipValue = `${confidenceLabel}: ${suggestion.reason}`;
-  return (
-    <TruncatedValue
-      value={tooltipValue}
-      tooltipValue={tooltipValue}
-      className="operation-review__confidence"
-      tooltipOnHover
-      ariaLabel={tooltipValue}
-    >
-      <ShieldCheck size={11} aria-hidden="true" />
-      <span>{suggestion.confidence}%</span>
-    </TruncatedValue>
-  );
+function uniqueOptions(values: string[]): Array<{ value: string; label: string }> {
+  const seen = new Set<string>()
+  const result: Array<{ value: string; label: string }> = []
+  for (const raw of values) {
+    const clean = raw.trim()
+    if (!clean || seen.has(clean)) continue
+    seen.add(clean)
+    result.push({ value: clean, label: clean })
+  }
+  return result
 }
 
 export default function BankStatementReview({
-  fileName,
+  batch,
+  projects,
+  categories,
+  onImportConfirmed,
   onBack,
   onUploadAnother,
   onNavigateToOperations,
-}: {
-  fileName: string;
-  onBack: () => void;
-  onUploadAnother: () => void;
-  onNavigateToOperations: () => void;
-}) {
-  const [operations, setOperations] = useState(initialOperations);
-  const [filter, setFilter] = useState<QuickFilter>("all");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [importResult, setImportResult] = useState<{ added: number; excluded: number } | null>(null);
-  const [notice, setNotice] = useState("");
-  const [openDuplicateId, setOpenDuplicateId] = useState<string | null>(null);
-  const [duplicatePopoverPosition, setDuplicatePopoverPosition] = useState({ top: 8, left: 8 });
-  const selectAllRef = useRef<HTMLInputElement>(null);
-  const duplicateBadgeRef = useRef<HTMLButtonElement>(null);
-  const duplicatePopoverRef = useRef<HTMLDivElement>(null);
+}: BankStatementReviewProps) {
+  const [operations, setOperations] = useState<ImportedOperation[]>(() => batch.operations)
+  const [filter, setFilter] = useState<ImportQuickFilter>("all")
+  const [searchQuery, setSearchQuery] = useState("")
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [importResult, setImportResult] = useState<ImportConfirmResult | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [notice, setNotice] = useState<{ text: string; kind: "success" | "error" } | null>(null)
+  const [openDuplicateId, setOpenDuplicateId] = useState<string | null>(null)
+  const [duplicateAnchorRect, setDuplicateAnchorRect] = useState<PopoverAnchorRect>({
+    top: 8,
+    bottom: 8,
+    left: 8,
+    right: 8,
+  })
+  const selectAllRef = useRef<HTMLInputElement>(null)
+  const duplicateBadgeRef = useRef<HTMLButtonElement>(null)
+  const duplicatePopoverRef = useRef<HTMLDivElement>(null)
+  const noticeTimerRef = useRef<number | null>(null)
 
-  const counts = useMemo(() => ({
-    all: operations.filter((operation) => operation.status !== "excluded").length,
-    review: operations.filter((operation) => operation.status === "review").length,
-    duplicates: operations.filter((operation) => operation.status !== "excluded" && operation.duplicateKind).length,
-    excluded: operations.filter((operation) => operation.status === "excluded").length,
-  }), [operations]);
-  const summaryTotals = useMemo(() => operations.reduce((totals, operation) => {
-    if (operation.status !== "excluded" && operation.amountKind !== "transfer") {
-      totals[operation.amountKind] += operation.amount;
+  const flashNotice = (text: string, kind: "success" | "error" = "success") => {
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current)
+    setNotice({ text, kind })
+    noticeTimerRef.current = window.setTimeout(() => setNotice(null), 3200)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current)
     }
-    return totals;
-  }, { income: 0, expense: 0 }), [operations]);
-  const selectedTotal = useMemo(() => operations.reduce((total, operation) => (
-    selectedIds.includes(operation.id) ? total + operation.amount : total
-  ), 0), [operations, selectedIds]);
+  }, [])
 
-  const visibleOperations = operations.filter((operation) => {
-    if (filter === "excluded") return operation.status === "excluded";
-    if (filter === "review") return operation.status === "review";
-    if (filter === "duplicates") return operation.status !== "excluded" && Boolean(operation.duplicateKind);
-    return operation.status !== "excluded";
-  });
-  const selectableIds = visibleOperations
-    .filter((operation) => operation.status === "review" && operation.duplicateKind !== "exact")
-    .map((operation) => operation.id);
-  const selectedVisibleCount = selectableIds.filter((id) => selectedIds.includes(id)).length;
-  const allVisibleSelected = selectableIds.length > 0 && selectedVisibleCount === selectableIds.length;
+  const summary = useMemo(() => computeBatchSummary(operations), [operations])
+
+  const counts = useMemo<Record<ImportQuickFilter, number>>(
+    () => ({
+      all: operations.filter((operation) => operation.status !== "excluded").length,
+      review: operations.filter((operation) => operation.status === "review").length,
+      confirmed: operations.filter((operation) => operation.status === "confirmed").length,
+      duplicates: operations.filter(
+        (operation) => operation.status !== "excluded" && Boolean(operation.duplicate),
+      ).length,
+      excluded: operations.filter((operation) => operation.status === "excluded").length,
+    }),
+    [operations],
+  )
+
+  const summaryTotals = useMemo(
+    () =>
+      operations.reduce(
+        (totals, operation) => {
+          if (operation.status !== "excluded" && operation.amountKind !== "transfer") {
+            totals[operation.amountKind] += operation.amount
+          }
+          return totals
+        },
+        { income: 0, expense: 0 },
+      ),
+    [operations],
+  )
+
+  const selectedTotals = useMemo(
+    () =>
+      operations.reduce(
+        (totals, operation) => {
+          if (!selectedIds.includes(operation.id)) return totals
+          if (operation.amountKind === "income") totals.income += operation.amount
+          else if (operation.amountKind === "expense") totals.expense += operation.amount
+          return totals
+        },
+        { income: 0, expense: 0 },
+      ),
+    [operations, selectedIds],
+  )
+
+  const confirmedReadyCount = useMemo(
+    () =>
+      operations.filter(
+        (operation) => operation.status === "confirmed" && !operation.importedToLedger,
+      ).length,
+    [operations],
+  )
+
+  const projectOptions = useMemo(
+    () =>
+      uniqueOptions([
+        ...projects.filter((project) => !project.archived).map((project) => project.name),
+        ...operations.map((operation) => operation.project),
+        "Без проекта",
+      ]),
+    [projects, operations],
+  )
+
+  const categoryOptionsByKind = useMemo(() => {
+    const expNames = categories.expenses.filter((c) => c.active).map((c) => c.name)
+    const incNames = categories.income.filter((c) => c.active).map((c) => c.name)
+    const taxNames = categories.taxes.filter((c) => c.active).map((c) => c.name)
+    const opCategoryNames = operations.map((operation) => operation.category)
+
+    return {
+      income: uniqueOptions([
+        ...incNames,
+        ...DEFAULT_FALLBACK_CATEGORIES,
+        ...expNames,
+        ...taxNames,
+        ...opCategoryNames,
+        "Неопределённое",
+      ]),
+      tax: uniqueOptions([
+        ...taxNames,
+        ...expNames,
+        ...DEFAULT_FALLBACK_CATEGORIES,
+        ...incNames,
+        ...opCategoryNames,
+        "Неопределённое",
+      ]),
+      expense: uniqueOptions([
+        ...expNames,
+        ...DEFAULT_FALLBACK_CATEGORIES,
+        ...taxNames,
+        ...incNames,
+        ...opCategoryNames,
+        "Неопределённое",
+      ]),
+    }
+  }, [categories, operations])
+
+  const categoryOptionsFor = (operation: ImportedOperation) => {
+    if (operation.type === "Налоговый платёж") return categoryOptionsByKind.tax
+    if (
+      operation.type === "Доход" ||
+      operation.type === "Возврат от поставщика" ||
+      operation.type === "Получение кредита"
+    ) {
+      return categoryOptionsByKind.income
+    }
+    return categoryOptionsByKind.expense
+  }
+
+  const visibleOperations = useMemo(() => {
+    const normalizedSearch = searchQuery.trim().toLowerCase()
+    return operations.filter((operation) => {
+      if (filter === "excluded" && operation.status !== "excluded") return false
+      if (filter === "review" && operation.status !== "review") return false
+      if (filter === "confirmed" && operation.status !== "confirmed") return false
+      if (
+        filter === "duplicates" &&
+        (operation.status === "excluded" || !operation.duplicate)
+      ) {
+        return false
+      }
+      if (filter === "all" && operation.status === "excluded") return false
+
+      if (!normalizedSearch) return true
+      return (
+        operation.counterparty.toLowerCase().includes(normalizedSearch) ||
+        operation.purpose.toLowerCase().includes(normalizedSearch) ||
+        operation.category.toLowerCase().includes(normalizedSearch) ||
+        operation.project.toLowerCase().includes(normalizedSearch)
+      )
+    })
+  }, [operations, filter, searchQuery])
+
+  const selectableIds = useMemo(
+    () =>
+      visibleOperations
+        .filter(
+          (operation) =>
+            operation.status === "review" && operation.duplicate?.kind !== "exact",
+        )
+        .map((operation) => operation.id),
+    [visibleOperations],
+  )
+
+  const selectedVisibleCount = selectableIds.filter((id) => selectedIds.includes(id)).length
+  const allVisibleSelected =
+    selectableIds.length > 0 && selectedVisibleCount === selectableIds.length
 
   useEffect(() => {
     if (selectAllRef.current) {
-      selectAllRef.current.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected;
+      selectAllRef.current.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected
     }
-  }, [selectedVisibleCount, allVisibleSelected]);
+  }, [selectedVisibleCount, allVisibleSelected])
 
   useEffect(() => {
-    if (!openDuplicateId) return undefined;
+    if (!openDuplicateId) return undefined
     const closeOnOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!duplicatePopoverRef.current?.contains(target) && !duplicateBadgeRef.current?.contains(target)) {
-        setOpenDuplicateId(null);
+      const target = event.target as Node
+      if (
+        !duplicatePopoverRef.current?.contains(target) &&
+        !duplicateBadgeRef.current?.contains(target)
+      ) {
+        setOpenDuplicateId(null)
       }
-    };
+    }
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpenDuplicateId(null);
-    };
-    const closeOnViewportChange = () => setOpenDuplicateId(null);
+      if (event.key === "Escape") setOpenDuplicateId(null)
+    }
+    const closeOnViewportChange = () => setOpenDuplicateId(null)
 
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
-    document.addEventListener("scroll", closeOnViewportChange, true);
-    window.addEventListener("resize", closeOnViewportChange);
+    document.addEventListener("mousedown", closeOnOutsideClick)
+    document.addEventListener("keydown", closeOnEscape)
+    document.addEventListener("scroll", closeOnViewportChange, true)
+    window.addEventListener("resize", closeOnViewportChange)
     return () => {
-      document.removeEventListener("mousedown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
-      document.removeEventListener("scroll", closeOnViewportChange, true);
-      window.removeEventListener("resize", closeOnViewportChange);
-    };
-  }, [openDuplicateId]);
+      document.removeEventListener("mousedown", closeOnOutsideClick)
+      document.removeEventListener("keydown", closeOnEscape)
+      document.removeEventListener("scroll", closeOnViewportChange, true)
+      window.removeEventListener("resize", closeOnViewportChange)
+    }
+  }, [openDuplicateId])
 
-  const updateOperation = (id: string, updates: Partial<ImportedOperation>) => {
-    setOperations((current) => current.map((operation) => (
-      operation.id === id ? { ...operation, ...updates } : operation
-    )));
-  };
+  const recordCorrection = (
+    existing: ManualCorrection[],
+    field: ManualCorrection["field"],
+    originalValue: string,
+    newValue: string,
+  ): ManualCorrection[] => {
+    if (originalValue === newValue) return existing
+    const nowIso = new Date().toISOString()
+    const previousEntry = existing.find((item) => item.field === field)
+    const rootOriginal = previousEntry ? previousEntry.originalValue : originalValue
+    const filtered = existing.filter((item) => item.field !== field)
+    if (rootOriginal === newValue) return filtered
+    return [
+      ...filtered,
+      {
+        field,
+        originalValue: rootOriginal,
+        newValue,
+        correctedAt: nowIso,
+      },
+    ]
+  }
 
-  const confirmOperations = (ids: string[]) => {
-    if (!ids.length) return;
-    setOperations((current) => current.map((operation) => (
-      ids.includes(operation.id) ? { ...operation, status: "confirmed" } : operation
-    )));
-    setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
-    setNotice(ids.length === 1 ? "Операция подтверждена" : `Подтверждено операций: ${ids.length}`);
-    window.setTimeout(() => setNotice(""), 3000);
-  };
+  const handleUpdateField = (
+    id: string,
+    patch: {
+      type?: ImportOperationType
+      category?: string
+      project?: string
+      ownership?: OwnershipStatus
+      paidByPersonalFunds?: boolean
+    },
+  ) => {
+    let apiPatch: OperationUpdatePatch = {}
 
-  const excludeOperation = (id: string) => {
-    setOperations((current) => current.map((operation) => (
-      operation.id === id ? { ...operation, status: "excluded" } : operation
-    )));
-    setSelectedIds((current) => current.filter((selectedId) => selectedId !== id));
-  };
+    setOperations((current) =>
+      current.map((operation) => {
+        if (operation.id !== id) return operation
+
+        let nextType = patch.type ?? operation.type
+        let nextCategory = patch.category ?? operation.category
+        const nextProject = patch.project ?? operation.project
+        let nextOwnership = patch.ownership ?? operation.ownership
+        let nextPaidByPersonalFunds =
+          patch.paidByPersonalFunds ?? operation.paidByPersonalFunds
+        let nextAmountKind = operation.amountKind
+
+        if (patch.type !== undefined) {
+          if (nextType === "Личный расход") {
+            nextOwnership = "Личное"
+            nextPaidByPersonalFunds = false
+            nextAmountKind = "expense"
+          } else if (nextType === "Перевод между собственными счетами") {
+            nextAmountKind = "transfer"
+            nextPaidByPersonalFunds = false
+          } else if (
+            nextType === "Доход" ||
+            nextType === "Возврат от поставщика" ||
+            nextType === "Получение кредита"
+          ) {
+            nextAmountKind = "income"
+            if (nextOwnership === "Личное") nextOwnership = "Бизнес"
+            nextPaidByPersonalFunds = false
+          } else if (
+            nextType === "Расход" ||
+            nextType === "Банковская комиссия" ||
+            nextType === "Налоговый платёж" ||
+            nextType === "Возврат покупателю" ||
+            nextType === "Погашение кредита"
+          ) {
+            nextAmountKind = "expense"
+            if (nextOwnership === "Личное") nextOwnership = "Бизнес"
+            if (batch.accountType === "personal" && nextType !== "Погашение кредита") {
+              nextPaidByPersonalFunds = true
+            }
+          } else {
+            nextAmountKind = operation.direction === "credit" ? "income" : "expense"
+          }
+        }
+
+        if (patch.ownership !== undefined) {
+          if (nextOwnership === "Личное") {
+            nextPaidByPersonalFunds = false
+            if (nextType === "Расход") nextType = "Личный расход"
+          } else if (nextOwnership === "Бизнес") {
+            if (nextType === "Личный расход") nextType = "Расход"
+            if (
+              batch.accountType === "personal" &&
+              nextAmountKind === "expense" &&
+              patch.paidByPersonalFunds === undefined
+            ) {
+              nextPaidByPersonalFunds = true
+            }
+          }
+        }
+
+        if (nextType === "Налоговый платёж" && nextCategory === "Неопределённое") {
+          nextCategory = categories.taxes[0]?.name ?? "Налоги"
+        }
+
+        let corrections = operation.corrections
+        corrections = recordCorrection(corrections, "type", operation.type, nextType)
+        corrections = recordCorrection(corrections, "category", operation.category, nextCategory)
+        corrections = recordCorrection(corrections, "project", operation.project, nextProject)
+        corrections = recordCorrection(corrections, "ownership", operation.ownership, nextOwnership)
+        corrections = recordCorrection(
+          corrections,
+          "paidByPersonalFunds",
+          String(operation.paidByPersonalFunds),
+          String(nextPaidByPersonalFunds),
+        )
+
+        apiPatch = {
+          type: nextType,
+          category: nextCategory,
+          project: nextProject,
+          ownership: nextOwnership,
+          paidByPersonalFunds: nextPaidByPersonalFunds,
+        }
+
+        return {
+          ...operation,
+          type: nextType,
+          category: nextCategory,
+          project: nextProject,
+          ownership: nextOwnership,
+          paidByPersonalFunds: nextPaidByPersonalFunds,
+          amountKind: nextAmountKind,
+          corrections,
+        }
+      }),
+    )
+
+    importApi.updateOperation(batch.id, id, apiPatch).catch(() => {
+      flashNotice("Не удалось сохранить изменение на сервере", "error")
+    })
+  }
+
+  const confirmOperations = (ids: string[], customNotice?: string) => {
+    const validIds = ids.filter((id) => {
+      const target = operations.find((operation) => operation.id === id)
+      return target && target.status !== "excluded" && target.duplicate?.kind !== "exact"
+    })
+    if (validIds.length === 0) {
+      if (ids.length > 0) {
+        flashNotice("Сначала проверьте и разрешите точный дубликат", "error")
+      }
+      return
+    }
+
+    const validSet = new Set(validIds)
+    setOperations((current) =>
+      current.map((operation) =>
+        validSet.has(operation.id) ? { ...operation, status: "confirmed" } : operation,
+      ),
+    )
+    setSelectedIds((current) => current.filter((id) => !validSet.has(id)))
+    flashNotice(
+      customNotice ??
+        (validIds.length === 1
+          ? "Операция подтверждена"
+          : `Подтверждено операций: ${validIds.length}`),
+    )
+
+    importApi
+      .bulkUpdateOperations(batch.id, validIds, { status: "confirmed" })
+      .catch(() => flashNotice("Не удалось обновить статус на сервере", "error"))
+  }
+
+  const excludeOperations = (ids: string[], customNotice?: string) => {
+    if (ids.length === 0) return
+    const idSet = new Set(ids)
+    setOperations((current) =>
+      current.map((operation) =>
+        idSet.has(operation.id) && !operation.importedToLedger
+          ? { ...operation, status: "excluded" }
+          : operation,
+      ),
+    )
+    setSelectedIds((current) => current.filter((id) => !idSet.has(id)))
+    flashNotice(
+      customNotice ??
+        (ids.length === 1 ? "Операция исключена" : `Исключено операций: ${ids.length}`),
+    )
+
+    importApi
+      .bulkUpdateOperations(batch.id, ids, { status: "excluded" })
+      .catch(() => flashNotice("Не удалось исключить операции на сервере", "error"))
+  }
+
+  const restoreToReview = (id: string) => {
+    const target = operations.find((operation) => operation.id === id)
+    if (!target || target.importedToLedger) return
+
+    setOperations((current) =>
+      current.map((operation) =>
+        operation.id === id ? { ...operation, status: "review" } : operation,
+      ),
+    )
+    flashNotice("Операция возвращена на проверку")
+
+    importApi
+      .updateOperation(batch.id, id, { status: "review" })
+      .catch(() => flashNotice("Не удалось вернуть статус на сервере", "error"))
+  }
 
   const openDuplicatePopover = (operation: ImportedOperation, badge: HTMLButtonElement) => {
-    const bounds = badge.getBoundingClientRect();
-    const popoverWidth = Math.min(310, window.innerWidth - 16);
-    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - popoverWidth - 8));
-    const top = bounds.bottom + 8 + 220 <= window.innerHeight
-      ? bounds.bottom + 8
-      : Math.max(8, bounds.top - 220);
-    setDuplicatePopoverPosition({ top, left });
-    setOpenDuplicateId((current) => current === operation.id ? null : operation.id);
-  };
+    const bounds = badge.getBoundingClientRect()
+    setDuplicateAnchorRect({
+      top: bounds.top,
+      bottom: bounds.bottom,
+      left: bounds.left,
+      right: bounds.right,
+    })
+    setOpenDuplicateId((current) => (current === operation.id ? null : operation.id))
+  }
 
-  const skipPossibleDuplicate = (operation: ImportedOperation) => {
-    excludeOperation(operation.id);
-    setOpenDuplicateId(null);
-    setNotice("Похожий дубликат пропущен");
-    window.setTimeout(() => setNotice(""), 3000);
-  };
+  const skipDuplicate = (operation: ImportedOperation) => {
+    setOperations((current) =>
+      current.map((candidate) =>
+        candidate.id === operation.id
+          ? {
+              ...candidate,
+              status: "excluded",
+              duplicate: candidate.duplicate
+                ? { ...candidate.duplicate, resolved: "skipped" }
+                : undefined,
+            }
+          : candidate,
+      ),
+    )
+    setSelectedIds((current) => current.filter((id) => id !== operation.id))
+    setOpenDuplicateId(null)
+    flashNotice("Дубликат исключён из импорта")
 
-  const keepPossibleDuplicate = (operation: ImportedOperation) => {
-    updateOperation(operation.id, { duplicateKind: undefined, duplicateOf: undefined });
-    setOpenDuplicateId(null);
-    setNotice("Операция оставлена в выписке");
-    window.setTimeout(() => setNotice(""), 3000);
-  };
+    importApi
+      .updateOperation(batch.id, operation.id, { status: "excluded" })
+      .catch(() => flashNotice("Не удалось обновить дубликат на сервере", "error"))
+  }
+
+  const keepDuplicate = (operation: ImportedOperation) => {
+    setOperations((current) =>
+      current.map((candidate) =>
+        candidate.id === operation.id
+          ? { ...candidate, duplicate: undefined }
+          : candidate,
+      ),
+    )
+    setOpenDuplicateId(null)
+    flashNotice("Операция оставлена как новая — можно проверять и подтверждать")
+
+    importApi
+      .updateOperation(batch.id, operation.id, { duplicate: undefined })
+      .catch(() => flashNotice("Не удалось обновить дубликат на сервере", "error"))
+  }
 
   const toggleSelection = (id: string) => {
-    setSelectedIds((current) => current.includes(id)
-      ? current.filter((selectedId) => selectedId !== id)
-      : [...current, id]);
-  };
+    setSelectedIds((current) =>
+      current.includes(id)
+        ? current.filter((selectedId) => selectedId !== id)
+        : [...current, id],
+    )
+  }
 
-  const excludeSelected = () => {
-    if (!selectedIds.length) return;
-    const excludedIds = new Set(selectedIds);
-    setOperations((current) => current.map((operation) => (
-      excludedIds.has(operation.id) ? { ...operation, status: "excluded" } : operation
-    )));
-    setSelectedIds([]);
-    setNotice(selectedIds.length === 1 ? "Операция исключена" : `Исключено операций: ${selectedIds.length}`);
-    window.setTimeout(() => setNotice(""), 3000);
-  };
-
-  const finalizeImport = () => {
-    if (!selectedIds.length && counts.review > 0) return;
-    const selected = new Set(selectedIds);
-    const finalizedOperations = operations.map((operation) => (
-      operation.status === "confirmed" || selected.has(operation.id)
+  const finalizeImport = async () => {
+    const selectedSet = new Set(selectedIds)
+    const promotedOperations = operations.map((operation) =>
+      operation.status === "review" &&
+      selectedSet.has(operation.id) &&
+      operation.duplicate?.kind !== "exact"
         ? { ...operation, status: "confirmed" as const }
-        : { ...operation, status: "excluded" as const }
-    ));
-    const added = finalizedOperations.filter((operation) => operation.status === "confirmed").length;
-    setOperations(finalizedOperations);
-    setSelectedIds([]);
-    setImportResult({ added, excluded: finalizedOperations.length - added });
-  };
+        : operation,
+    )
+
+    const newlyConfirmedOps = promotedOperations.filter(
+      (operation) => operation.status === "confirmed" && !operation.importedToLedger,
+    )
+
+    if (newlyConfirmedOps.length === 0) {
+      flashNotice("Нет подтверждённых операций для переноса в учёт", "error")
+      return
+    }
+
+    const newlyConfirmedIds = newlyConfirmedOps.map((operation) => operation.id)
+    const excludedIds = promotedOperations
+      .filter((operation) => operation.status === "excluded")
+      .map((operation) => operation.id)
+
+    setSubmitting(true)
+    try {
+      const result = await importApi.confirmBatch(batch.id, {
+        operations: promotedOperations,
+        newlyConfirmedIds,
+        excludedIds,
+      })
+
+      const ledgerOps = newlyConfirmedOps
+        .map(mapImportedOperationToLedger)
+        .filter((item): item is LedgerOperationInput => item !== null)
+
+      if (ledgerOps.length > 0) {
+        onImportConfirmed(ledgerOps)
+      }
+
+      const newlyConfirmedSet = new Set(newlyConfirmedIds)
+      setOperations(
+        promotedOperations.map((operation) =>
+          newlyConfirmedSet.has(operation.id)
+            ? { ...operation, importedToLedger: true }
+            : operation,
+        ),
+      )
+      setSelectedIds([])
+      setImportResult(result)
+    } catch {
+      flashNotice("Не удалось завершить импорт. Попробуйте ещё раз.", "error")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const openDuplicateOperation = openDuplicateId
+    ? operations.find((candidate) => candidate.id === openDuplicateId)
+    : undefined
+  const matchingFileOperation =
+    openDuplicateOperation?.duplicate?.source === "in_file" &&
+    openDuplicateOperation.duplicate.matchedOperationId
+      ? operations.find(
+          (candidate) =>
+            candidate.id === openDuplicateOperation.duplicate?.matchedOperationId,
+        )
+      : undefined
 
   return (
     <section
       className="operation-review"
-      aria-labelledby={importResult ? "operation-review-success-title" : "operation-review-title"}
+      aria-labelledby={
+        importResult ? "operation-review-success-title" : "operation-review-title"
+      }
     >
       {importResult ? (
-        <div className="operation-review__success" role="status">
-          <div className="operation-review__success-icon"><CircleCheck size={34} strokeWidth={1.8} /></div>
-          <p className="statement-eyebrow">Импорт завершён</p>
-          <h2 id="operation-review-success-title">Операции успешно импортированы</h2>
-          <p className="operation-review__success-copy">Выписка обработана, результат сохранён в учёте.</p>
-          <div className="operation-review__success-summary">
-            <div><strong>{importResult.added}</strong><span>операций добавлено в учёт</span></div>
-            <div><strong>{importResult.excluded}</strong><span>дубликатов и строк исключено</span></div>
-          </div>
-          <div className="operation-review__success-actions">
-            <button type="button" className="operation-review__success-secondary" onClick={onUploadAnother}>
-              <Upload size={16} /> Загрузить ещё одну выписку
-            </button>
-            <button type="button" className="operation-review__success-primary" onClick={onNavigateToOperations}>
-              Перейти к операциям <ArrowRight size={16} />
-            </button>
-          </div>
-        </div>
+        <ImportResultScreen
+          result={importResult}
+          onContinueReview={() => {
+            setImportResult(null)
+            setFilter("review")
+          }}
+          onUploadAnother={onUploadAnother}
+          onNavigateToOperations={onNavigateToOperations}
+        />
       ) : (
         <>
-      <button type="button" className="operation-review__back" onClick={onBack}>
-        <ArrowLeft size={17} />
-        <span>Назад к загрузке файла</span>
-      </button>
-
-      <header className="operation-review__heading">
-        <div>
-          <div className="operation-review__title-line">
-            <h2 id="operation-review-title">Проверка операций</h2>
-            <span className="operation-review__count">{counts.review} требуют проверки</span>
-          </div>
-          <div className="operation-review__file">
-            <FileSpreadsheet size={16} />
-            <TruncatedValue value={fileName} strictOverflow className="operation-review__file-name" />
-          </div>
-        </div>
-        <div className="operation-review__summary" aria-label="Сводка импорта">
-          <span><strong>{counts.all}</strong> операций в выписке</span>
-          <i />
-          <span><strong>{counts.duplicates}</strong> дубликата</span>
-          <i />
-          <span className="operation-review__summary-total">
-            <small>Поступления</small>
-            <TruncatedValue value={formatCurrency(summaryTotals.income)} strictOverflow className="operation-review__summary-total-value" />
-          </span>
-          <i />
-          <span className="operation-review__summary-total">
-            <small>Расходы</small>
-            <TruncatedValue value={formatCurrency(summaryTotals.expense)} strictOverflow className="operation-review__summary-total-value" />
-          </span>
-        </div>
-      </header>
-
-      <div className="operation-review__notice">
-        <Info size={18} />
-        <span>Неподтверждённые операции не попадают в отчётность P&amp;L и Cash Flow до сохранения</span>
-      </div>
-
-      <nav className="operation-review__filters" aria-label="Фильтр операций" role="tablist">
-        {filterLabels.map(({ id, label }) => (
-          <button
-            key={id}
-            id={`operation-filter-${id}`}
-            type="button"
-            role="tab"
-            aria-selected={filter === id}
-            aria-controls="operation-review-table"
-            className={filter === id ? "is-active" : ""}
-            onClick={() => setFilter(id)}
-          >
-            <span>{label}</span>
-            <i>{counts[id]}</i>
+          <button type="button" className="operation-review__back" onClick={onBack}>
+            <ArrowLeft size={17} />
+            <span>Назад к загрузке файла</span>
           </button>
-        ))}
-      </nav>
 
-      <div className="operation-review__table-wrap" id="operation-review-table" role="tabpanel" aria-labelledby={`operation-filter-${filter}`}>
-        <table className="operation-review__table">
-          <colgroup>
-            <col className="operation-review__col-check" />
-            <col className="operation-review__col-date" />
-            <col className="operation-review__col-details" />
-            <col className="operation-review__col-amount" />
-            <col className="operation-review__col-type" />
-            <col className="operation-review__col-category" />
-            <col className="operation-review__col-project" />
-            <col className="operation-review__col-owner" />
-            <col className="operation-review__col-actions" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th className="operation-review__select-cell">
-                <input
-                  ref={selectAllRef}
-                  type="checkbox"
-                  aria-label="Выбрать все операции, требующие проверки"
-                  checked={allVisibleSelected}
-                  disabled={selectableIds.length === 0}
-                  onChange={() => setSelectedIds((current) => (
-                    allVisibleSelected
-                      ? current.filter((id) => !selectableIds.includes(id))
-                      : [...new Set([...current, ...selectableIds])]
-                  ))}
-                />
-                <span className="operation-review__select-all-label">Выбрать все</span>
-              </th>
-              <th>Дата</th>
-              <th>Контрагент и назначение</th>
-              <th>Сумма</th>
-              <th>Тип операции</th>
-              <th>Категория</th>
-              <th>Проект</th>
-              <th>Принадлежность</th>
-              <th aria-label="Действия" />
-            </tr>
-          </thead>
-          <tbody>
-            {visibleOperations.map((operation) => {
-              const isExcluded = operation.status === "excluded";
-              const isConfirmed = operation.status === "confirmed";
-              const isUncertain = [operation.type, operation.category, operation.ownership].some(isUncertainValue);
-              const amountLabel = `${operation.amountKind === "income" ? "+" : operation.amountKind === "expense" ? "−" : ""}${formatCurrency(operation.amount)}`;
-              return (
-                <tr key={operation.id} className={[
-                  isExcluded ? "is-excluded" : "",
-                  isConfirmed ? "is-confirmed" : "",
-                  operation.duplicateKind && !isExcluded ? `has-${operation.duplicateKind}-duplicate` : "",
-                  isUncertain && !isExcluded ? "has-uncertain" : "",
-                  selectedIds.includes(operation.id) ? "is-selected" : "",
-                ].filter(Boolean).join(" ")}>
-                  <td className="operation-review__select-cell">
-                    <input
-                      type="checkbox"
-                      aria-label={`Выбрать операцию: ${operation.counterparty}`}
-                      checked={selectedIds.includes(operation.id)}
-                      disabled={operation.status !== "review"}
-                      onChange={() => toggleSelection(operation.id)}
-                    />
-                  </td>
-                  <td className="operation-review__date">{operation.date}</td>
-                  <td className="operation-review__details-cell">
-                    <div className="operation-review__details">
-                      <div className="operation-review__counterparty-line">
-                        <TruncatedValue value={operation.counterparty} strictOverflow className="operation-review__counterparty" />
-                        {operation.duplicateKind === "exact" && !isExcluded && (
-                          <TruncatedValue
-                            value="Точное совпадение с другой операцией в выписке"
-                            tooltipValue="Точное совпадение с другой операцией в выписке"
-                            className="operation-review__duplicate operation-review__duplicate--exact"
-                            tooltipOnHover
-                            ariaLabel="Точное совпадение с другой операцией в выписке"
-                          >
-                            <span aria-hidden="true">!</span> Дубликат
-                          </TruncatedValue>
-                        )}
-                        {operation.duplicateKind === "possible" && !isExcluded && (
-                          <button
-                            ref={openDuplicateId === operation.id ? duplicateBadgeRef : undefined}
-                            type="button"
-                            className="operation-review__duplicate operation-review__duplicate--possible"
-                            aria-expanded={openDuplicateId === operation.id}
-                            aria-label={`Сравнить возможный дубликат: ${operation.counterparty}`}
-                            onClick={(event) => openDuplicatePopover(operation, event.currentTarget)}
-                          >
-                            <span aria-hidden="true">!</span> Возможный дубликат
-                          </button>
-                        )}
-                      </div>
-                      <TruncatedValue value={operation.purpose} strictOverflow className="operation-review__purpose" />
-                    </div>
-                  </td>
-                  <td className={`operation-review__amount operation-review__amount--${operation.amountKind}`}>
-                    {operation.amountKind === "transfer" ? (
-                      <span className="operation-review__transfer">
-                        <ArrowLeftRight size={14} />
-                        <TruncatedValue value={amountLabel} strictOverflow className="operation-review__amount-value" />
-                      </span>
-                    ) : (
-                      <TruncatedValue value={amountLabel} strictOverflow className="operation-review__amount-value" />
-                    )}
-                  </td>
-                  <td>
-                    <div className="operation-review__field-content">
-                      <div className="operation-review__field">
-                        <CustomSelect
-                          ariaLabel={`Тип операции: ${operation.counterparty}`}
-                          value={operation.type}
-                          options={operationTypeOptions}
-                          disabled={isExcluded}
-                          menuPortal
-                          strictTooltip
-                          className={`operation-review__select operation-review__select--type${isUncertainValue(operation.type) ? " operation-review__select--uncertain" : ""}`}
-                          onChange={(value) => updateOperation(operation.id, { type: value })}
-                        />
-                        {isUncertainValue(operation.type) && (
-                          <TruncatedValue
-                            value="Требует проверки: не удалось определить тип операции"
-                            className="operation-review__field-alert"
-                            tooltipOnHover
-                            ariaLabel="Требует проверки: не удалось определить тип операции"
-                          >
-                            <AlertCircle size={14} aria-hidden="true" />
-                          </TruncatedValue>
-                        )}
-                      </div>
-                      <FieldConfidence suggestion={operation.suggestions?.type} />
-                    </div>
-                  </td>
-                  <td>
-                    <div className="operation-review__field-content">
-                      <div className="operation-review__field">
-                        <CustomSelect
-                          ariaLabel={`Категория: ${operation.counterparty}`}
-                          value={operation.category}
-                          options={categoryOptions}
-                          disabled={isExcluded}
-                          menuPortal
-                          strictTooltip
-                          className={`operation-review__select operation-review__select--category${isUncertainValue(operation.category) ? " operation-review__select--uncertain" : ""}`}
-                          onChange={(value) => updateOperation(operation.id, { category: value })}
-                        />
-                        {isUncertainValue(operation.category) && (
-                          <TruncatedValue
-                            value="Требует проверки: не удалось определить категорию"
-                            className="operation-review__field-alert"
-                            tooltipOnHover
-                            ariaLabel="Требует проверки: не удалось определить категорию"
-                          >
-                            <AlertCircle size={14} aria-hidden="true" />
-                          </TruncatedValue>
-                        )}
-                      </div>
-                      <FieldConfidence suggestion={operation.suggestions?.category} />
-                    </div>
-                  </td>
-                  <td>
-                    <CustomSelect
-                      ariaLabel={`Проект: ${operation.counterparty}`}
-                      value={operation.project}
-                      options={projectOptions}
-                      disabled={isExcluded}
-                      menuPortal
-                      strictTooltip
-                      className="operation-review__select operation-review__select--project"
-                      onChange={(value) => updateOperation(operation.id, { project: value })}
-                    />
-                  </td>
-                  <td>
-                    <div className="operation-review__field-content">
-                      <div className="operation-review__field">
-                        <CustomSelect
-                          ariaLabel={`Принадлежность: ${operation.counterparty}`}
-                          options={ownershipSelectOptions}
-                          className={`operation-review__owner operation-review__owner--${operation.ownership === "Бизнес" ? "business" : operation.ownership === "Личное" ? "personal" : "unknown"}${isUncertainValue(operation.ownership) ? " operation-review__select--uncertain" : ""}`}
-                          value={operation.ownership}
-                          disabled={isExcluded}
-                          menuPortal
-                          strictTooltip
-                          onChange={(value) => updateOperation(operation.id, { ownership: value })}
-                        />
-                        {isUncertainValue(operation.ownership) && (
-                          <TruncatedValue
-                            value="Требует проверки: не удалось определить принадлежность операции"
-                            className="operation-review__field-alert"
-                            tooltipOnHover
-                            ariaLabel="Требует проверки: не удалось определить принадлежность операции"
-                          >
-                            <AlertCircle size={14} aria-hidden="true" />
-                          </TruncatedValue>
-                        )}
-                      </div>
-                      <FieldConfidence suggestion={operation.suggestions?.ownership} />
-                    </div>
-                  </td>
-                  <td className="operation-review__actions">
-                    {!isExcluded && !isConfirmed ? (
-                      <>
-                        <button
-                          type="button"
-                          className="operation-review__confirm"
-                          aria-label={`Подтвердить операцию: ${operation.counterparty}`}
-                          title="Подтвердить операцию"
-                          onClick={() => confirmOperations([operation.id])}
-                        >
-                          <Check size={16} />
-                        </button>
-                        <button
-                          type="button"
-                          className="operation-review__exclude"
-                          aria-label={`Исключить из импорта: ${operation.counterparty}`}
-                          title="Исключить из импорта"
-                          onClick={() => excludeOperation(operation.id)}
-                        >
-                          <X size={15} />
-                        </button>
-                      </>
-                    ) : (
-                      <span className={`operation-review__row-state${isExcluded ? " is-excluded" : ""}`}>
-                        {isExcluded ? <><Minus size={14} /> Исключена</> : <><CircleCheck size={14} /> Подтверждена</>}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {openDuplicateId && createPortal((() => {
-          const operation = operations.find((candidate) => candidate.id === openDuplicateId);
-          if (!operation || operation.duplicateKind !== "possible") return null;
-          const matchingOperation = operations.find((candidate) => candidate.id === operation.duplicateOf);
-          return (
-            <div
-              ref={duplicatePopoverRef}
-              className="operation-review__duplicate-popover"
-              role="dialog"
-              aria-label="Сравнение похожих операций"
-              style={{ top: duplicatePopoverPosition.top, left: duplicatePopoverPosition.left }}
-            >
-              <div className="operation-review__duplicate-popover-heading">
-                <strong>Похожая операция</strong>
-                <button type="button" aria-label="Закрыть сравнение" onClick={() => setOpenDuplicateId(null)}><X size={15} /></button>
+          <header className="operation-review__heading">
+            <div>
+              <div className="operation-review__title-line">
+                <h2 id="operation-review-title">Проверка операций</h2>
+                <span className="operation-review__count">
+                  {counts.review} требуют проверки
+                </span>
               </div>
-              {matchingOperation ? (
-                <div className="operation-review__duplicate-comparison">
-                  <span />
-                  <strong>Эта операция</strong>
-                  <strong>В выписке</strong>
-                  <span>Дата</span><span>{operation.date}</span><span>{matchingOperation.date}</span>
-                  <span>Контрагент</span><span>{operation.counterparty}</span><span>{matchingOperation.counterparty}</span>
-                  <span>Сумма</span><span>{formatCurrency(operation.amount)}</span><span>{formatCurrency(matchingOperation.amount)}</span>
-                  <span>Назначение</span><span>{operation.purpose}</span><span>{matchingOperation.purpose}</span>
-                </div>
-              ) : (
-                <p className="operation-review__duplicate-missing">Сравнение операции недоступно.</p>
-              )}
-              <div className="operation-review__duplicate-actions">
-                <button type="button" className="operation-review__duplicate-skip" onClick={() => skipPossibleDuplicate(operation)}>Пропустить дубликат</button>
-                <button type="button" className="operation-review__duplicate-keep" onClick={() => keepPossibleDuplicate(operation)}>Оставить операцию</button>
+              <div className="operation-review__file">
+                <FileSpreadsheet size={16} />
+                <TruncatedValue
+                  value={batch.fileName}
+                  strictOverflow
+                  className="operation-review__file-name"
+                />
               </div>
             </div>
-          );
-        })(), document.body)}
-        {visibleOperations.length === 0 && (
-          <div className="operation-review__empty">
-            <div>{filter === "excluded" ? <X size={19} /> : <CheckCheck size={19} />}</div>
-            <strong>{filter === "excluded" ? "Исключённых операций пока нет" : "Операций в этой выборке нет"}</strong>
-            <span>{filter === "excluded" ? "Исключённые операции появятся здесь" : "Измените фильтр, чтобы посмотреть другие операции"}</span>
+            <div className="operation-review__summary" aria-label="Сводка импорта">
+              <span>
+                <strong>{counts.all}</strong> операций в выписке
+              </span>
+              <i />
+              <span>
+                <strong>{counts.duplicates}</strong> дубликатов
+              </span>
+              <i />
+              <span className="operation-review__summary-total">
+                <small>Поступления</small>
+                <TruncatedValue
+                  value={formatRuCurrency(summaryTotals.income)}
+                  strictOverflow
+                  className="operation-review__summary-total-value"
+                />
+              </span>
+              <i />
+              <span className="operation-review__summary-total">
+                <small>Расходы</small>
+                <TruncatedValue
+                  value={formatRuCurrency(summaryTotals.expense)}
+                  strictOverflow
+                  className="operation-review__summary-total-value"
+                />
+              </span>
+            </div>
+          </header>
+
+          <PreprocessingSummary
+            batch={batch}
+            summary={summary}
+            onSelectFilter={setFilter}
+          />
+
+          <div className="operation-review__notice">
+            <Info size={18} />
+            <span>
+              Неподтверждённые операции не попадают в отчётность P&amp;L и Cash Flow до сохранения
+            </span>
           </div>
-        )}
-      </div>
 
-      <div className="operation-review__sticky-bar">
-        <div className="operation-review__sticky-summary" aria-live="polite">
-          <strong>Выбрано к импорту: {formatOperationCount(selectedIds.length)}</strong>
-          <span>Итого: {formatCurrency(selectedTotal)}</span>
-        </div>
-        <div className="operation-review__sticky-actions">
-          <button
-            type="button"
-            className="operation-review__sticky-exclude"
-            disabled={selectedIds.length === 0}
-            onClick={excludeSelected}
-          >
-            Исключить выбранные
-          </button>
-          <button
-            type="button"
-            className="operation-review__sticky-confirm"
-            disabled={selectedIds.length === 0 && counts.review > 0}
-            onClick={finalizeImport}
-          >
-            Подтвердить импорт
-          </button>
-        </div>
-      </div>
+          <div className="operation-review__toolbar">
+            <nav
+              className="operation-review__filters"
+              aria-label="Фильтр операций"
+              role="tablist"
+            >
+              {FILTER_TABS.map(({ id, label }) => (
+                <button
+                  key={id}
+                  id={`operation-filter-${id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === id}
+                  aria-controls="operation-review-table"
+                  className={filter === id ? "is-active" : ""}
+                  onClick={() => setFilter(id)}
+                >
+                  <span>{label}</span>
+                  <i>{counts[id]}</i>
+                </button>
+              ))}
+            </nav>
 
-      <footer className="operation-review__footer">
-        <span>
-          <CircleCheck size={15} />
-          {counts.review === 0 ? "Все операции проверены" : `${counts.review} операций ожидают подтверждения`}
-        </span>
-        {notice && <span className="operation-review__toast" role="status"><Check size={14} />{notice}</span>}
-        <span>Проверьте назначение и категорию перед подтверждением</span>
-      </footer>
+            <div className="operation-review__search">
+              <Search size={15} aria-hidden="true" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Поиск по контрагенту, назначению, проекту…"
+                aria-label="Поиск по импортированным операциям"
+              />
+            </div>
+          </div>
+
+          <div
+            className="operation-review__table-wrap"
+            id="operation-review-table"
+            role="tabpanel"
+            aria-labelledby={`operation-filter-${filter}`}
+          >
+            <table className="operation-review__table">
+              <colgroup>
+                <col className="operation-review__col-check" />
+                <col className="operation-review__col-date" />
+                <col className="operation-review__col-details" />
+                <col className="operation-review__col-amount" />
+                <col className="operation-review__col-type" />
+                <col className="operation-review__col-category" />
+                <col className="operation-review__col-project" />
+                <col className="operation-review__col-owner" />
+                <col className="operation-review__col-actions" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th className="operation-review__select-cell">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      aria-label="Выбрать все операции, требующие проверки"
+                      title="Выбрать все"
+                      checked={allVisibleSelected}
+                      disabled={selectableIds.length === 0}
+                      onChange={() =>
+                        setSelectedIds((current) =>
+                          allVisibleSelected
+                            ? current.filter((id) => !selectableIds.includes(id))
+                            : Array.from(new Set([...current, ...selectableIds])),
+                        )
+                      }
+                    />
+                  </th>
+                  <th>Дата</th>
+                  <th>Контрагент и назначение</th>
+                  <th>Сумма</th>
+                  <th>Тип операции</th>
+                  <th>Категория</th>
+                  <th>Проект</th>
+                  <th>Принадлежность</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleOperations.map((operation) => (
+                  <ImportedOperationRow
+                    key={operation.id}
+                    operation={operation}
+                    accountType={batch.accountType}
+                    typeOptions={OPERATION_TYPE_OPTIONS}
+                    categoryOptions={categoryOptionsFor(operation)}
+                    projectOptions={projectOptions}
+                    ownershipOptions={OWNERSHIP_SELECT_OPTIONS}
+                    isSelected={selectedIds.includes(operation.id)}
+                    isDuplicateOpen={openDuplicateId === operation.id}
+                    duplicateBadgeRef={duplicateBadgeRef}
+                    onToggleSelect={toggleSelection}
+                    onUpdateField={handleUpdateField}
+                    onConfirm={(id) => confirmOperations([id])}
+                    onExclude={(id) => excludeOperations([id])}
+                    onRestoreToReview={restoreToReview}
+                    onOpenDuplicate={openDuplicatePopover}
+                  />
+                ))}
+              </tbody>
+            </table>
+
+            {visibleOperations.length === 0 && (
+              <div className="operation-review__empty">
+                <div>
+                  {filter === "excluded" ? <X size={19} /> : <CheckCheck size={19} />}
+                </div>
+                <strong>
+                  {filter === "excluded"
+                    ? "Исключённых операций пока нет"
+                    : "Операций в этой выборке нет"}
+                </strong>
+                <span>
+                  {filter === "excluded"
+                    ? "Исключённые операции и пропущенные дубликаты появятся здесь"
+                    : "Измените фильтр или поисковый запрос"}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="operation-review__mobile-list"
+            role="tabpanel"
+            aria-labelledby={`operation-filter-${filter}`}
+          >
+            {visibleOperations.length > 0 ? (
+              visibleOperations.map((operation) => (
+                <ImportedOperationCard
+                  key={operation.id}
+                  operation={operation}
+                  accountType={batch.accountType}
+                  typeOptions={OPERATION_TYPE_OPTIONS}
+                  categoryOptions={categoryOptionsFor(operation)}
+                  projectOptions={projectOptions}
+                  ownershipOptions={OWNERSHIP_SELECT_OPTIONS}
+                  isSelected={selectedIds.includes(operation.id)}
+                  isDuplicateOpen={openDuplicateId === operation.id}
+                  duplicateBadgeRef={duplicateBadgeRef}
+                  onToggleSelect={toggleSelection}
+                  onUpdateField={handleUpdateField}
+                  onConfirm={(id) => confirmOperations([id])}
+                  onExclude={(id) => excludeOperations([id])}
+                  onRestoreToReview={restoreToReview}
+                  onOpenDuplicate={openDuplicatePopover}
+                />
+              ))
+            ) : (
+              <div className="operation-review__empty">
+                <div>
+                  {filter === "excluded" ? <X size={19} /> : <CheckCheck size={19} />}
+                </div>
+                <strong>
+                  {filter === "excluded"
+                    ? "Исключённых операций пока нет"
+                    : "Операций в этой выборке нет"}
+                </strong>
+                <span>
+                  {filter === "excluded"
+                    ? "Исключённые операции и пропущенные дубликаты появятся здесь"
+                    : "Измените фильтр или поисковый запрос"}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {openDuplicateOperation && (
+            <DuplicateComparisonPopover
+              operation={openDuplicateOperation}
+              matchingInFile={matchingFileOperation}
+              anchorRect={duplicateAnchorRect}
+              popoverRef={duplicatePopoverRef}
+              onClose={() => setOpenDuplicateId(null)}
+              onSkipDuplicate={skipDuplicate}
+              onKeepOperation={keepDuplicate}
+            />
+          )}
+
+          <ImportStickyActionBar
+            selectedCount={selectedIds.length}
+            selectedIncomeTotal={selectedTotals.income}
+            selectedExpenseTotal={selectedTotals.expense}
+            confirmedReadyCount={confirmedReadyCount}
+            submitting={submitting}
+            onConfirmSelected={() => confirmOperations(selectedIds)}
+            onExcludeSelected={() => excludeOperations(selectedIds)}
+            onFinalizeImport={finalizeImport}
+          />
+
+          <footer className="operation-review__footer">
+            <span>
+              <CheckCheck size={15} />
+              {counts.review === 0
+                ? "Все операции проверены"
+                : `${counts.review} операций ожидают проверки`}
+            </span>
+            {notice && (
+              <span
+                className={`operation-review__toast${notice.kind === "error" ? " is-error" : ""}`}
+                role="status"
+              >
+                <Check size={14} />
+                {notice.text}
+              </span>
+            )}
+            <span>
+              Проверьте назначение и категорию перед подтверждением
+            </span>
+          </footer>
         </>
       )}
     </section>
-  );
+  )
 }

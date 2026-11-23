@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type SetStateAction } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type SetStateAction } from "react";
+import { createPortal } from "react-dom";
 import { ArrowDownRight, ArrowUpRight, ChevronDown, ChevronRight, Percent } from "lucide-react";
 import CustomSelect from "./CustomSelect";
 import TruncatedValue from "./TruncatedValue";
@@ -15,6 +16,7 @@ type Operation = {
   periodDate: string;
   comment: string;
   amount: number;
+  paidByPersonalFunds?: boolean;
 };
 
 type Project = {
@@ -112,79 +114,141 @@ function PeriodPicker({ value, type, onChange, ariaLabel }: {
 }) {
   const [open, setOpen] = useState(false);
   const [viewYear, setViewYear] = useState(() => periodYear(value, type));
+  const [menuPos, setMenuPos] = useState({ left: 8, top: 8, width: 225, maxHeight: 260 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setViewYear(periodYear(value, type));
   }, [value, type]);
 
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !menuRef.current) return;
+
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    const menuEl = menuRef.current;
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+    const edge = 8;
+    const gap = 6;
+
+    let safeBottom = viewportHeight - edge;
+    const bottomNav = document.querySelector(".bottom-nav");
+    if (bottomNav) {
+      const navRect = bottomNav.getBoundingClientRect();
+      if (navRect.height > 0 && navRect.top < viewportHeight) {
+        safeBottom = Math.min(safeBottom, navRect.top - edge);
+      }
+    }
+
+    const width = Math.min(triggerRect.width, viewportWidth - edge * 2);
+    const left = Math.max(edge, Math.min(triggerRect.left, viewportWidth - width - edge));
+    const naturalHeight = Math.min(menuEl.scrollHeight + 2, 260);
+    const spaceBelow = safeBottom - (triggerRect.bottom + gap);
+    const spaceAbove = triggerRect.top - edge - gap;
+
+    let maxHeight: number;
+    let top: number;
+    if (naturalHeight <= spaceBelow || spaceBelow >= spaceAbove) {
+      maxHeight = Math.min(260, Math.max(140, Math.floor(spaceBelow)));
+      top = triggerRect.bottom + gap;
+    } else {
+      maxHeight = Math.min(260, Math.max(140, Math.floor(spaceAbove)));
+      top = Math.max(edge, triggerRect.top - Math.min(naturalHeight, maxHeight) - gap);
+    }
+
+    setMenuPos({ left, top, width, maxHeight });
+  }, [open, type, viewYear]);
+
   useEffect(() => {
     if (!open) return;
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (event.target instanceof Node && !containerRef.current?.contains(event.target)) setOpen(false);
+      const target = event.target;
+      if (target instanceof Node && !containerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    const closeOnScroll = (event: Event) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    const closeOnResize = () => setOpen(false);
     document.addEventListener("mousedown", closeOnOutsideClick);
     document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("scroll", closeOnScroll, true);
+    window.addEventListener("resize", closeOnResize);
     return () => {
       document.removeEventListener("mousedown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", closeOnResize);
     };
   }, [open]);
 
-  return (
-    <div className="period-picker" ref={containerRef}>
-      <button
-        type="button"
-        className="period-picker__trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span>{periodLabel(value, type)}</span>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
-      </button>
-      {open && (
-        <div className="period-picker__menu">
-          <div className="period-picker__year">
-            <button
-              type="button"
-              aria-label="Предыдущий год"
-              disabled={viewYear <= 1000}
-              onClick={() => setViewYear((year) => Math.max(1000, year - 1))}
-            >
-              ‹
-            </button>
-            <strong>{viewYear}</strong>
-            <button
-              type="button"
-              aria-label="Следующий год"
-              disabled={viewYear >= 9999}
-              onClick={() => setViewYear((year) => Math.min(9999, year + 1))}
-            >
-              ›
-            </button>
-          </div>
-          <div className="period-picker__options" role="listbox" aria-label={ariaLabel}>
-            {periodsForYear(viewYear, type).map((period) => (
-              <button
-                key={period}
-                type="button"
-                role="option"
-                aria-selected={period === value}
-                className={period === value ? "is-selected" : ""}
-                onClick={() => { onChange(period); setOpen(false); }}
-              >
-                {periodLabel(period, type)}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+  const portalMenu = open ? (
+    <div
+      ref={menuRef}
+      className="period-picker__menu period-picker__menu--portal"
+      style={menuPos}
+    >
+      <div className="period-picker__year">
+        <button
+          type="button"
+          aria-label="Предыдущий год"
+          disabled={viewYear <= 1000}
+          onClick={() => setViewYear((year) => Math.max(1000, year - 1))}
+        >
+          ‹
+        </button>
+        <strong>{viewYear}</strong>
+        <button
+          type="button"
+          aria-label="Следующий год"
+          disabled={viewYear >= 9999}
+          onClick={() => setViewYear((year) => Math.min(9999, year + 1))}
+        >
+          ›
+        </button>
+      </div>
+      <div className="period-picker__options" role="listbox" aria-label={ariaLabel}>
+        {periodsForYear(viewYear, type).map((period) => (
+          <button
+            key={period}
+            type="button"
+            role="option"
+            aria-selected={period === value}
+            className={period === value ? "is-selected" : ""}
+            onClick={() => { onChange(period); setOpen(false); }}
+          >
+            {periodLabel(period, type)}
+          </button>
+        ))}
+      </div>
     </div>
+  ) : null;
+
+  return (
+    <>
+      <div className="period-picker" ref={containerRef}>
+        <button
+          ref={triggerRef}
+          type="button"
+          className="period-picker__trigger"
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span>{periodLabel(value, type)}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+        </button>
+      </div>
+      {portalMenu && typeof document !== "undefined" ? createPortal(portalMenu, document.body) : null}
+    </>
   );
 }
 
@@ -340,7 +404,8 @@ export default function FinancialDashboard({
     ? comparisonPeriod
     : previousPeriod(effectivePeriod, periodType);
   const filteredOperations = operations.filter((operation) =>
-    selectedProjects.length === 0 || selectedProjects.includes(operation.project),
+    (selectedProjects.length === 0 || selectedProjects.includes(operation.project)) &&
+    !(accountingMethod === "cashflow" && operation.paidByPersonalFunds),
   );
   const operationTimestamp = (operation: Operation) =>
     validDateParts(accountingMethod === "pnl" ? operation.periodDate : operation.date)?.date.getTime() ?? 0;
@@ -626,10 +691,10 @@ export default function FinancialDashboard({
                     </i>
                     <strong>{groupLabels[group]}</strong>
                   </span>
-                  <strong><TruncatedValue className={`financial-report-value${Math.abs(firstTotal) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(firstTotal, groupIncome(tableFirst))} tooltipValue={formatExactReportValue(firstTotal, groupIncome(tableFirst))} showTooltip={reportView === "percent" || Math.abs(firstTotal) >= currencyTruncationThreshold} /></strong>
-                  {compareEnabled && <strong><TruncatedValue className={`financial-report-value${Math.abs(secondTotal) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(secondTotal, groupIncome(tableSecond))} tooltipValue={formatExactReportValue(secondTotal, groupIncome(tableSecond))} showTooltip={reportView === "percent" || Math.abs(secondTotal) >= currencyTruncationThreshold} /></strong>}
+                  <strong data-col-label={compareEnabled ? periodLabel(tableFirstPeriod, periodType) : undefined}><TruncatedValue className={`financial-report-value${Math.abs(firstTotal) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(firstTotal, groupIncome(tableFirst))} tooltipValue={formatExactReportValue(firstTotal, groupIncome(tableFirst))} showTooltip={reportView === "percent" || Math.abs(firstTotal) >= currencyTruncationThreshold} /></strong>
+                  {compareEnabled && <strong data-col-label={periodLabel(tableSecondPeriod, periodType)}><TruncatedValue className={`financial-report-value${Math.abs(secondTotal) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(secondTotal, groupIncome(tableSecond))} tooltipValue={formatExactReportValue(secondTotal, groupIncome(tableSecond))} showTooltip={reportView === "percent" || Math.abs(secondTotal) >= currencyTruncationThreshold} /></strong>}
                   {compareEnabled && (
-                    <strong className={varianceClass(group, delta)}>
+                    <strong className={varianceClass(group, delta)} data-col-label="Отклонение">
                       <TruncatedValue
                         className={`financial-report-value${Math.abs(delta) >= 1_000_000 ? " financial-report-value--large" : ""}`}
                         value={`${currency(delta, true)} ${deltaPercent(firstTotal, secondTotal)}`}
@@ -648,10 +713,10 @@ export default function FinancialDashboard({
                   return (
                     <div className="financial-table__row" key={`${group}-${category}`}>
                       <span>{category}</span>
-                      <strong><TruncatedValue className={`financial-report-value${Math.abs(value1) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(value1, groupIncome(tableFirst))} tooltipValue={formatExactReportValue(value1, groupIncome(tableFirst))} showTooltip={reportView === "percent" || Math.abs(value1) >= currencyTruncationThreshold} /></strong>
-                      {compareEnabled && <strong><TruncatedValue className={`financial-report-value${Math.abs(value2) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(value2, groupIncome(tableSecond))} tooltipValue={formatExactReportValue(value2, groupIncome(tableSecond))} showTooltip={reportView === "percent" || Math.abs(value2) >= currencyTruncationThreshold} /></strong>}
+                      <strong data-col-label={compareEnabled ? periodLabel(tableFirstPeriod, periodType) : undefined}><TruncatedValue className={`financial-report-value${Math.abs(value1) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(value1, groupIncome(tableFirst))} tooltipValue={formatExactReportValue(value1, groupIncome(tableFirst))} showTooltip={reportView === "percent" || Math.abs(value1) >= currencyTruncationThreshold} /></strong>
+                      {compareEnabled && <strong data-col-label={periodLabel(tableSecondPeriod, periodType)}><TruncatedValue className={`financial-report-value${Math.abs(value2) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(value2, groupIncome(tableSecond))} tooltipValue={formatExactReportValue(value2, groupIncome(tableSecond))} showTooltip={reportView === "percent" || Math.abs(value2) >= currencyTruncationThreshold} /></strong>}
                       {compareEnabled && (
-                        <strong className={varianceClass(group, categoryDelta)}>
+                        <strong className={varianceClass(group, categoryDelta)} data-col-label="Отклонение">
                           <TruncatedValue
                             className={`financial-report-value${Math.abs(categoryDelta) >= 1_000_000 ? " financial-report-value--large" : ""}`}
                             value={`${currency(categoryDelta, true)} ${deltaPercent(value1, value2)}`}
@@ -670,10 +735,10 @@ export default function FinancialDashboard({
           })}
           <div className="financial-table__profit">
             <span><i aria-hidden="true">=</i><strong>Чистая прибыль (Итог периода)</strong></span>
-            <strong><TruncatedValue className={`financial-report-value${Math.abs(tableFirst.profit) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(tableFirst.profit, tableFirst.totals.income, true)} tooltipValue={formatExactReportValue(tableFirst.profit, tableFirst.totals.income, true)} showTooltip={reportView === "percent" || Math.abs(tableFirst.profit) >= currencyTruncationThreshold} /></strong>
-            {compareEnabled && <strong><TruncatedValue className={`financial-report-value${Math.abs(tableSecond.profit) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(tableSecond.profit, tableSecond.totals.income, true)} tooltipValue={formatExactReportValue(tableSecond.profit, tableSecond.totals.income, true)} showTooltip={reportView === "percent" || Math.abs(tableSecond.profit) >= currencyTruncationThreshold} /></strong>}
+            <strong data-col-label={compareEnabled ? periodLabel(tableFirstPeriod, periodType) : undefined}><TruncatedValue className={`financial-report-value${Math.abs(tableFirst.profit) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(tableFirst.profit, tableFirst.totals.income, true)} tooltipValue={formatExactReportValue(tableFirst.profit, tableFirst.totals.income, true)} showTooltip={reportView === "percent" || Math.abs(tableFirst.profit) >= currencyTruncationThreshold} /></strong>
+            {compareEnabled && <strong data-col-label={periodLabel(tableSecondPeriod, periodType)}><TruncatedValue className={`financial-report-value${Math.abs(tableSecond.profit) >= 1_000_000 ? " financial-report-value--large" : ""}`} value={formatReportValue(tableSecond.profit, tableSecond.totals.income, true)} tooltipValue={formatExactReportValue(tableSecond.profit, tableSecond.totals.income, true)} showTooltip={reportView === "percent" || Math.abs(tableSecond.profit) >= currencyTruncationThreshold} /></strong>}
             {compareEnabled && (
-              <strong className={varianceClass("profit", tableSecond.profit - tableFirst.profit)}>
+              <strong className={varianceClass("profit", tableSecond.profit - tableFirst.profit)} data-col-label="Отклонение">
                 <TruncatedValue
                   className={`financial-report-value${Math.abs(tableSecond.profit - tableFirst.profit) >= 1_000_000 ? " financial-report-value--large" : ""}`}
                   value={`${currency(tableSecond.profit - tableFirst.profit, true)} ${deltaPercent(tableFirst.profit, tableSecond.profit)}`}
