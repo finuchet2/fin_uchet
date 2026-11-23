@@ -30,7 +30,7 @@ export default function CustomSelect({
   strictTooltip?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [menuPosition, setMenuPosition] = useState({ left: 8, top: 8, minWidth: 320 });
+  const [menuPosition, setMenuPosition] = useState({ left: 8, top: 8, minWidth: 260, maxHeight: 280 });
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -42,25 +42,54 @@ export default function CustomSelect({
     if (!isOpen || !menuPortal || !triggerRef.current || !menuRef.current) return;
 
     const triggerBounds = triggerRef.current.getBoundingClientRect();
-    const menuBounds = menuRef.current.getBoundingClientRect();
+    const menuEl = menuRef.current;
     const edge = 8;
+    const gap = 6;
     const viewportWidth = document.documentElement.clientWidth;
     const viewportHeight = document.documentElement.clientHeight;
-    const minWidth = Math.min(
+    const targetMinWidth = Math.min(
       viewportWidth - edge * 2,
-      Math.max(triggerBounds.width, 320),
+      viewportWidth < 768 ? triggerBounds.width : Math.max(triggerBounds.width, 280),
     );
     const menuWidth = Math.min(
       viewportWidth - edge * 2,
-      Math.max(menuBounds.width, minWidth),
+      Math.max(menuEl.offsetWidth, targetMinWidth),
     );
     const left = Math.max(edge, Math.min(triggerBounds.left, viewportWidth - menuWidth - edge));
-    const below = triggerBounds.bottom + 6;
-    const top = below + menuBounds.height <= viewportHeight - edge
-      ? below
-      : Math.max(edge, triggerBounds.top - menuBounds.height - 6);
+    const naturalHeight = Math.min(menuEl.scrollHeight + 2, 280);
 
-    setMenuPosition({ left, top, minWidth });
+    let safeBottom = viewportHeight - edge;
+    const bottomNav = document.querySelector(".bottom-nav");
+    if (bottomNav) {
+      const navRect = bottomNav.getBoundingClientRect();
+      if (navRect.height > 0 && navRect.top < viewportHeight) {
+        safeBottom = Math.min(safeBottom, navRect.top - edge);
+      }
+    }
+    if (viewportWidth >= 768) {
+      const stickyBar = document.querySelector(".operation-review__sticky-bar");
+      if (stickyBar) {
+        const stickyRect = stickyBar.getBoundingClientRect();
+        if (stickyRect.height > 0 && stickyRect.top > triggerBounds.bottom) {
+          safeBottom = Math.min(safeBottom, stickyRect.top - edge);
+        }
+      }
+    }
+
+    const spaceBelow = safeBottom - (triggerBounds.bottom + gap);
+    const spaceAbove = triggerBounds.top - edge - gap;
+
+    let maxHeight: number;
+    let top: number;
+    if (naturalHeight <= spaceBelow || spaceBelow >= spaceAbove) {
+      maxHeight = Math.min(280, Math.max(120, Math.floor(spaceBelow)));
+      top = triggerBounds.bottom + gap;
+    } else {
+      maxHeight = Math.min(280, Math.max(120, Math.floor(spaceAbove)));
+      top = Math.max(edge, triggerBounds.top - Math.min(naturalHeight, maxHeight) - gap);
+    }
+
+    setMenuPosition({ left, top, minWidth: targetMinWidth, maxHeight });
   }, [isOpen, menuPortal, options.length]);
 
   useEffect(() => {
