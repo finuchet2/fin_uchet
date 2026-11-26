@@ -16,12 +16,24 @@ import {
 import { createPortal } from "react-dom";
 import FinancialDashboard from "./FinancialDashboard";
 import BankStatementUpload from "./BankStatementUpload";
+import ProjectCreationModal from "./ProjectCreationModal";
+import ProjectCategoriesModal from "./ProjectCategoriesModal";
 import CustomSelect from "./CustomSelect";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { apiRequest } from "./api/client";
 import type { LedgerOperationInput } from "./types/import";
+import {
+  buildEmptyProjectCategories,
+  buildProjectCategoriesFromTemplate,
+  countProjectCategories,
+  type IndustryProjectTemplate,
+  type IndustryTemplateId,
+  type ProjectCategoryBuckets,
+  type ProjectCategoryItem,
+  type ProjectCategoryTab,
+} from "./types/templates";
 
 type Screen = "home" | "register" | "login" | "recover" | "new-password" | "app";
 
@@ -1438,44 +1450,104 @@ function OperationsContent({ operations, projects, onAdd, onDelete, onEdit, peri
 
 type OperationDrawerType = "expense" | "income" | "tax";
 
-function OperationDrawer({ operation, projects, categories, onClose, onSaved, onCreateProject }: {
+function OperationDrawer({ operation, initialProject, projects, categories, onClose, onSaved, onCreateProject, onAddProjectCategory }: {
   operation: Operation | null;
+  initialProject?: string;
   projects: DirectoryProject[];
   categories: Record<OperationType, string[]>;
   onClose: () => void;
   onSaved: (op: Operation) => void;
-  onCreateProject: (name: string, description: string) => DirectoryProject;
+  onCreateProject: (name: string, description: string, template: IndustryProjectTemplate | null) => DirectoryProject;
+  onAddProjectCategory: (projectId: string, tab: ProjectCategoryTab, name: string) => boolean;
 }) {
   const activeProjects = projects.filter((p) => !p.archived);
-  const [type, setType] = useState<OperationDrawerType>(operation?.type ?? "expense");
-  const [amount, setAmount] = useState(operation ? Math.abs(operation.amount).toFixed(2).replace(".", ",") : "");
-  const initialFactDate = operation?.date ?? formatDateValue(new Date());
+  const tabForType = (opType: OperationDrawerType): CategoryTab =>
+    opType === "income" ? "income" : opType === "tax" ? "taxes" : "expenses";
+  const resolveAvailableCategories = (projectNameValue: string, opType: OperationDrawerType): string[] => {
+    const projectItem = projects.find((item) => item.name === projectNameValue);
+    if (projectItem?.categories) {
+      return projectItem.categories[tabForType(opType)]
+        .filter((item) => item.active)
+        .map((item) => item.name);
+    }
+    return categories[opType];
+  };
+
+  const initialType: OperationDrawerType = operation?.type ?? "expense";
+  const initialProjectName = operation?.project ?? initialProject ?? activeProjects[0]?.name ?? "";
+  const [type, setType] = useState<OperationDrawerType>(initialType);
+  const [amount, setAmount] = useState(
+    operation ? Math.abs(operation.amount).toFixed(2).replace(".", ",") : "",
+  );
+  const [todayDate] = useState(() => formatDateValue(new Date()));
+  const initialFactDate = operation?.date ?? todayDate;
   const [factDate, setFactDate] = useState(initialFactDate);
   const [periodDate, setPeriodDate] = useState(operation?.periodDate ?? initialFactDate);
-  const [periodDateManuallyEdited, setPeriodDateManuallyEdited] = useState(Boolean(operation?.periodDate));
-  const [project, setProject] = useState(operation?.project ?? activeProjects[0]?.name ?? "");
-  const [category, setCategory] = useState(operation?.category ?? categories.expense[0] ?? "");
+  const [periodDateManuallyEdited, setPeriodDateManuallyEdited] = useState(
+    Boolean(operation?.periodDate),
+  );
+  const [project, setProject] = useState(initialProjectName);
+  const [category, setCategory] = useState(() => {
+    if (operation?.category) return operation.category;
+    return resolveAvailableCategories(initialProjectName, initialType)[0] ?? "";
+  });
   const [comment, setComment] = useState(operation?.comment ?? "");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({ amount: "", category: "", factDate: "", periodDate: "" });
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [newProjectDescription, setNewProjectDescription] = useState("");
-  const [newProjectError, setNewProjectError] = useState("");
+  const [catInlineOpen, setCatInlineOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [newCatError, setNewCatError] = useState("");
 
-  const typeCategories = operation?.type === type && !categories[type].includes(operation.category)
-    ? [operation.category, ...categories[type]]
-    : categories[type];
+  const selectedProjectObj = projects.find((item) => item.name === project);
+  const baseCategoriesForScope = resolveAvailableCategories(project, type);
+  const typeCategories = operation?.type === type && operation?.project === project && operation.category && !baseCategoriesForScope.includes(operation.category)
+    ? [operation.category, ...baseCategoriesForScope]
+    : baseCategoriesForScope;
   const commentLimit = 255;
 
   const switchType = (next: OperationDrawerType) => {
     setType(next);
-    setCategory(categories[next][0] ?? "");
+    const nextList = resolveAvailableCategories(project, next);
+    setCategory(nextList[0] ?? "");
+    setCatInlineOpen(false);
+    setNewCatName("");
+    setNewCatError("");
+    setFieldErrors((current) => ({ ...current, category: "" }));
+  };
+
+  const handleProjectChange = (nextProjectName: string) => {
+    setProject(nextProjectName);
+    const nextList = resolveAvailableCategories(nextProjectName, type);
+    setCategory(nextList[0] ?? "");
+    setCatInlineOpen(false);
+    setNewCatName("");
+    setNewCatError("");
+    setError("");
     setFieldErrors((current) => ({ ...current, category: "" }));
   };
 
   const formatAmountInput = (raw: string) => {
     return raw.replace(/[^\d,.]/g, "").replace(/\./g, ",");
+  };
+
+  const handleQuickAddCategory = () => {
+    if (!selectedProjectObj) return;
+    const clean = newCatName.trim();
+    if (clean.length < 2) {
+      setNewCatError("Минимум 2 символа");
+      return;
+    }
+    const added = onAddProjectCategory(selectedProjectObj.id, tabForType(type), clean);
+    if (!added) {
+      setNewCatError("Такая категория уже есть в этом проекте");
+      return;
+    }
+    setCategory(clean);
+    setFieldErrors((current) => ({ ...current, category: "" }));
+    setNewCatName("");
+    setNewCatError("");
+    setCatInlineOpen(false);
   };
 
   const save = () => {
@@ -1485,7 +1557,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
         : !/^\d{1,12}([.,]\d{1,2})?$/.test(amount)
           ? "Введите сумму не более 12 цифр до запятой и 2 после"
         : "",
-      category: category ? "" : "Выберите категорию",
+      category: category ? "" : "Выберите или добавьте категорию",
       factDate: factDate ? (isValidDateInput(factDate) ? "" : "Введите корректную дату факта в формате ДД.ММ.ГГГГ") : "Укажите дату факта",
       periodDate: periodDate ? (isValidDateInput(periodDate) ? "" : "Введите корректную дату периода в формате ДД.ММ.ГГГГ") : "Укажите дату периода",
     };
@@ -1512,24 +1584,6 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
       ...(operation?.paidByPersonalFunds ? { paidByPersonalFunds: true } : {}),
     };
     onSaved(op);
-  };
-
-  const handleCreateProject = () => {
-    const clean = newProjectName.trim();
-    if (clean.length < 2) {
-      setNewProjectError("Название должно содержать минимум 2 символа");
-      return;
-    }
-    if (projects.some((p) => p.name.toLowerCase() === clean.toLowerCase())) {
-      setNewProjectError("Проект с таким названием уже существует");
-      return;
-    }
-    const created = onCreateProject(clean, newProjectDescription.trim());
-    setProject(created.name);
-    setProjectModalOpen(false);
-    setNewProjectName("");
-    setNewProjectDescription("");
-    setNewProjectError("");
   };
 
   return (
@@ -1597,7 +1651,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
                 <CabinetIcon name="projects" />
                 <CustomDropdown
                   value={project}
-                  onChange={setProject}
+                  onChange={handleProjectChange}
                   ariaLabel="Проект операции"
                   options={activeProjects.length
                     ? activeProjects.map((item) => ({ value: item.name, label: item.name }))
@@ -1613,18 +1667,59 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
 
           <div className="drawer-field">
             <label className="drawer-field__label">Категория <span className="drawer-field__required" aria-hidden="true">*</span></label>
-            <div className="dashboard-select">
-              <CabinetIcon name={type === "income" ? "arrow-down" : type === "tax" ? "wallet" : "arrow-up"} />
-              <CustomDropdown
-                value={category}
-                onChange={(value) => {
-                  setCategory(value);
-                  setFieldErrors((current) => ({ ...current, category: "" }));
-                }}
-                ariaLabel="Категория операции"
-                options={typeCategories.map((item) => ({ value: item, label: item }))}
-              />
+            <div className={selectedProjectObj?.categories ? "drawer-category-row" : undefined}>
+              <div className="dashboard-select">
+                <CabinetIcon name={type === "income" ? "arrow-down" : type === "tax" ? "wallet" : "arrow-up"} />
+                <CustomDropdown
+                  value={category}
+                  onChange={(value) => {
+                    setCategory(value);
+                    setFieldErrors((current) => ({ ...current, category: "" }));
+                  }}
+                  ariaLabel="Категория операции"
+                  options={typeCategories.length
+                    ? typeCategories.map((item) => ({ value: item, label: item }))
+                    : [{ value: "", label: "Нет категорий в проекте" }]}
+                />
+              </div>
+              {selectedProjectObj?.categories && (
+                <button
+                  type="button"
+                  className="directory-btn directory-btn--ghost"
+                  onClick={() => {
+                    setCatInlineOpen((current) => !current);
+                    setNewCatError("");
+                  }}
+                >
+                  <CabinetIcon name="plus" />
+                  <span>Категория</span>
+                </button>
+              )}
             </div>
+            {catInlineOpen && selectedProjectObj && (
+              <div className="drawer-inline-category">
+                <input
+                  value={newCatName}
+                  onChange={(event) => {
+                    setNewCatName(event.target.value);
+                    setNewCatError("");
+                  }}
+                  placeholder={`Новая категория в «${selectedProjectObj.name}»`}
+                  maxLength={48}
+                  aria-label="Название новой категории проекта"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleQuickAddCategory();
+                    }
+                  }}
+                />
+                <button type="button" className="directory-btn directory-btn--primary" onClick={handleQuickAddCategory}>
+                  Добавить
+                </button>
+              </div>
+            )}
+            {newCatError && <p className="drawer-field__error">{newCatError}</p>}
             {fieldErrors.category && <p className="drawer-field__error">{fieldErrors.category}</p>}
           </div>
 
@@ -1645,27 +1740,23 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
         </div>
 
         {projectModalOpen && (
-          <div className="directory-modal directory-modal--inline" role="dialog" aria-modal="true" aria-label="Создать проект">
-            <div className="directory-modal__card">
-              <div className="directory-modal__head">
-                <h3>Новый проект</h3>
-                <button type="button" className="icon-button" aria-label="Закрыть" onClick={() => setProjectModalOpen(false)}>
-                  <CabinetIcon name="x" />
-                </button>
-              </div>
-              <label>Название проекта
-                <input value={newProjectName} onChange={(e) => { setNewProjectName(e.target.value); setNewProjectError(""); }} placeholder="Например, ПВЗ Wildberries" maxLength={60} autoFocus />
-              </label>
-              <label>Описание
-                <input value={newProjectDescription} onChange={(e) => setNewProjectDescription(e.target.value)} placeholder="Например, пункт выдачи" maxLength={120} />
-              </label>
-              {newProjectError && <p className="directory-error">{newProjectError}</p>}
-              <div className="directory-modal__actions">
-                <button type="button" className="directory-btn directory-btn--ghost" onClick={() => setProjectModalOpen(false)}>Отмена</button>
-                <button type="button" className="directory-btn directory-btn--primary" onClick={handleCreateProject}>Создать</button>
-              </div>
-            </div>
-          </div>
+          <ProjectCreationModal
+            inline
+            existingProjectNames={projects.map((item) => item.name)}
+            onClose={() => setProjectModalOpen(false)}
+            onConfirm={({ name: createdName, description: createdDesc, template }) => {
+              const created = onCreateProject(createdName, createdDesc, template);
+              setProject(created.name);
+              const nextCats = created.categories
+                ? created.categories[tabForType(type)].filter((c) => c.active).map((c) => c.name)
+                : categories[type];
+              setCategory(nextCats[0] ?? "");
+              setCatInlineOpen(false);
+              setFieldErrors((current) => ({ ...current, category: "" }));
+              setError("");
+              setProjectModalOpen(false);
+            }}
+          />
         )}
       </div>
     </div>
@@ -1679,30 +1770,48 @@ type DirectoryProject = {
   archived: boolean;
   operations: number;
   color?: string;
+  templateId?: IndustryTemplateId | null;
+  templateName?: string;
+  categories?: ProjectCategoryBuckets;
 };
 
 const projectColors = ["#2563EB", "#10B981", "#8B5CF6", "#F59E0B", "#EC4899", "#06B6D4", "#6366F1"];
 
-function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
+function ProjectsContent({
+  projects,
+  setProjects,
+  operations,
+  onProjectRenamed,
+  onCreateProject,
+  onOpenOperationForProject,
+  onAddProjectCategory,
+  onRenameProjectCategory,
+  onToggleProjectCategory,
+  onDeleteProjectCategory,
+}: {
   projects: DirectoryProject[];
   setProjects: Dispatch<SetStateAction<DirectoryProject[]>>;
+  operations: Operation[];
   onProjectRenamed: (previousName: string, nextName: string) => void;
+  onCreateProject: (name: string, description: string, template: IndustryProjectTemplate | null) => DirectoryProject;
+  onOpenOperationForProject: (projectName: string) => void;
+  onAddProjectCategory: (projectId: string, tab: ProjectCategoryTab, name: string) => boolean;
+  onRenameProjectCategory: (projectId: string, tab: ProjectCategoryTab, categoryId: string, nextName: string) => boolean;
+  onToggleProjectCategory: (projectId: string, tab: ProjectCategoryTab, categoryId: string) => void;
+  onDeleteProjectCategory: (projectId: string, tab: ProjectCategoryTab, categoryId: string) => void;
 }) {
-  const [formOpen, setFormOpen] = useState(false);
+  const [createWizardOpen, setCreateWizardOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ text: string; actionProject?: string } | null>(null);
+  const [categoriesModalProjectId, setCategoriesModalProjectId] = useState<string | null>(null);
   const activeCount = projects.filter((item) => !item.archived).length;
   const archivedCount = projects.length - activeCount;
 
   const openCreate = () => {
-    setEditingId(null);
-    setName("");
-    setDescription("");
-    setError("");
-    setFormOpen(true);
+    setCreateWizardOpen(true);
   };
 
   const openEdit = (project: DirectoryProject) => {
@@ -1710,29 +1819,29 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
     setName(project.name);
     setDescription(project.description);
     setError("");
-    setFormOpen(true);
   };
 
-  const flash = (text: string) => {
-    setNotice(text);
-    window.setTimeout(() => setNotice(""), 3200);
+  const flash = (text: string, actionProject?: string) => {
+    setNotice({ text, actionProject });
+    window.setTimeout(() => setNotice(null), 5000);
   };
-  const saveProject = () => {
+
+  const saveEditProject = () => {
+    if (!editingId) return;
     const cleanName = name.trim();
     if (cleanName.length < 2) {
       setError("Название должно содержать минимум 2 символа");
       return;
     }
-    if (editingId) {
-      const previousName = projects.find((item) => item.id === editingId)?.name;
-      setProjects((current) => current.map((item) => (item.id === editingId ? { ...item, name: cleanName, description: description.trim() || "Без описания" } : item)));
-      if (previousName && previousName !== cleanName) onProjectRenamed(previousName, cleanName);
-      flash("Проект «" + cleanName + "» переименован");
-    } else {
-      setProjects((current) => [...current, { id: "p-" + Date.now(), name: cleanName, description: description.trim() || "Новый проект", archived: false, operations: 0, color: projectColors[projects.length % projectColors.length] }]);
-      flash("Проект «" + cleanName + "» создан");
+    if (projects.some((item) => item.id !== editingId && item.name.toLowerCase() === cleanName.toLowerCase())) {
+      setError("Проект с таким названием уже существует");
+      return;
     }
-    setFormOpen(false);
+    const previousName = projects.find((item) => item.id === editingId)?.name;
+    setProjects((current) => current.map((item) => (item.id === editingId ? { ...item, name: cleanName, description: description.trim() || "Без описания" } : item)));
+    if (previousName && previousName !== cleanName) onProjectRenamed(previousName, cleanName);
+    flash("Проект «" + cleanName + "» переименован");
+    setEditingId(null);
   };
 
   const archiveProject = (id: string) => {
@@ -1749,6 +1858,10 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
     flash(`Проект «${project.name}» удалён`);
   };
 
+  const categoriesModalProject = categoriesModalProjectId
+    ? projects.find((item) => item.id === categoriesModalProjectId) ?? null
+    : null;
+
   return (
     <section className="section-page directory">
       <div className="section-page__intro directory__intro">
@@ -1762,9 +1875,23 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
         </button>
       </div>
       {notice && (
-        <div className="directory-toast" role="status">
+        <div className="directory-toast project-created-toast" role="status">
           <CabinetIcon name="check" />
-          <span>{notice}</span>
+          <span>{notice.text}</span>
+          {notice.actionProject && (
+            <button
+              type="button"
+              className="directory-btn directory-btn--primary"
+              onClick={() => {
+                const targetProject = notice.actionProject;
+                setNotice(null);
+                if (targetProject) onOpenOperationForProject(targetProject);
+              }}
+            >
+              <CabinetIcon name="plus" />
+              <span>Добавить операцию</span>
+            </button>
+          )}
         </div>
       )}
       {projects.length === 0 ? (
@@ -1774,7 +1901,7 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
               <CabinetIcon name="projects" />
             </div>
             <h2>У вас пока нет проектов</h2>
-            <p>Создайте проект, чтобы разделять финансы по направлениям бизнеса и видеть аналитику по каждому отдельно</p>
+            <p>Создайте проект с готовым отраслевым набором категорий или настройте направления бизнеса вручную</p>
             <button type="button" className="dashboard-empty__button" onClick={openCreate}>
               <CabinetIcon name="plus" />
               <span>Создать проект</span>
@@ -1784,79 +1911,129 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
       ) : (
         <>
           <div className="project-directory-grid">
-            {projects.map((project) => (
-              <article key={project.id} className={project.archived ? "project-card project-card--archived" : "project-card"}>
-                <div className="project-card__top">
-                  <span className="project-avatar" style={{ background: project.color ?? projectColors[0] }}>{project.name.split(" ").map((word) => word[0]).slice(0, 2).join("")}</span>
-                  <span className={project.archived ? "status-badge status-badge--archived" : "status-badge status-badge--active"}>{project.archived ? "В архиве" : "Активен"}</span>
-                </div>
-                <h3>{project.name}</h3>
-                <p className="project-card__description">{project.description}</p>
-                <p className="project-card__meta">{project.operations} операций</p>
-                <div className="project-card__actions">
-                  {!project.archived ? (
-                    <>
-                      <button type="button" className="directory-btn directory-btn--ghost" onClick={() => openEdit(project)}>
-                        <CabinetIcon name="edit" />
-                        <span>Редактировать</span>
-                      </button>
-                      <button type="button" className="directory-btn directory-btn--soft" onClick={() => archiveProject(project.id)}>
-                        <CabinetIcon name="archive" />
-                        <span>В архив</span>
-                      </button>
-                      {project.operations === 0 && (
-                        <button type="button" className="directory-btn directory-btn--danger" onClick={() => deleteProject(project)}>
-                          <CabinetIcon name="trash" />
-                          <span>Удалить</span>
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" className="directory-btn directory-btn--primary" onClick={() => restoreProject(project.id)}>
-                        <CabinetIcon name="restore" />
-                        <span>Восстановить</span>
-                      </button>
-                      {project.operations === 0 && (
-                        <button type="button" className="directory-btn directory-btn--danger" onClick={() => deleteProject(project)}>
-                          <CabinetIcon name="trash" />
-                          <span>Удалить</span>
-                        </button>
-                      )}
-                    </>
+            {projects.map((project) => {
+              const catCount = countProjectCategories(project.categories);
+              return (
+                <article key={project.id} className={project.archived ? "project-card project-card--archived" : "project-card"}>
+                  <div className="project-card__top">
+                    <span className="project-avatar" style={{ background: project.color ?? projectColors[0] }}>{project.name.split(" ").map((word) => word[0]).slice(0, 2).join("")}</span>
+                    <div className="project-card__badges">
+                      <span className={project.archived ? "status-badge status-badge--archived" : "status-badge status-badge--active"}>{project.archived ? "В архиве" : "Активен"}</span>
+                    </div>
+                  </div>
+                  <h3>{project.name}</h3>
+                  <p className="project-card__description">{project.description}</p>
+                  <p className="project-card__meta">
+                    {project.operations} операций
+                    {project.categories !== undefined && ` • ${catCount} категорий`}
+                  </p>
+                  {project.categories !== undefined && (
+                    <span className="project-preset-chip">
+                      {project.templateName ? `Шаблон: ${project.templateName}` : "Своя настройка категорий"}
+                    </span>
                   )}
-                </div>
-              </article>
-            ))}
+                  <div className="project-card__actions">
+                    <button
+                      type="button"
+                      className="directory-btn directory-btn--ghost"
+                      onClick={() => setCategoriesModalProjectId(project.id)}
+                    >
+                      <CabinetIcon name="settings" />
+                      <span>Категории</span>
+                    </button>
+                    {!project.archived ? (
+                      <>
+                        <button type="button" className="directory-btn directory-btn--ghost" onClick={() => openEdit(project)}>
+                          <CabinetIcon name="edit" />
+                          <span>Редактировать</span>
+                        </button>
+                        <button type="button" className="directory-btn directory-btn--soft" onClick={() => archiveProject(project.id)}>
+                          <CabinetIcon name="archive" />
+                          <span>В архив</span>
+                        </button>
+                        {project.operations === 0 && (
+                          <button type="button" className="directory-btn directory-btn--danger" onClick={() => deleteProject(project)}>
+                            <CabinetIcon name="trash" />
+                            <span>Удалить</span>
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" className="directory-btn directory-btn--primary" onClick={() => restoreProject(project.id)}>
+                          <CabinetIcon name="restore" />
+                          <span>Восстановить</span>
+                        </button>
+                        {project.operations === 0 && (
+                          <button type="button" className="directory-btn directory-btn--danger" onClick={() => deleteProject(project)}>
+                            <CabinetIcon name="trash" />
+                            <span>Удалить</span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
           <div className="directory-hint">
             <CabinetIcon name="info" />
-            <p>Проекты с существующими операциями нельзя удалить — их можно только переименовать или отправить в архив</p>
+            <p>Категории каждого проекта независимы: изменения в одном проекте не влияют на другие направления</p>
           </div>
         </>
       )}
-      {formOpen && (
-        <div className="directory-modal" role="dialog" aria-modal="true">
-          <div className="directory-modal__card">
+      {createWizardOpen && (
+        <ProjectCreationModal
+          existingProjectNames={projects.map((item) => item.name)}
+          onClose={() => setCreateWizardOpen(false)}
+          onConfirm={({ name: createdName, description: createdDesc, template }) => {
+            const created = onCreateProject(createdName, createdDesc, template);
+            setCreateWizardOpen(false);
+            flash(
+              template
+                ? `Проект «${created.name}» создан с категориями шаблона «${template.name}»`
+                : `Проект «${created.name}» создан для самостоятельной настройки`,
+              created.name,
+            );
+          }}
+        />
+      )}
+      {editingId && (
+        <div className="directory-modal" role="dialog" aria-modal="true" onClick={() => setEditingId(null)}>
+          <div className="directory-modal__card" onClick={(event) => event.stopPropagation()}>
             <div className="directory-modal__head">
-              <h3>{editingId ? "Редактировать проект" : "Новый проект"}</h3>
-              <button type="button" className="icon-button" aria-label="Закрыть" onClick={() => setFormOpen(false)}>
+              <h3>Редактировать проект</h3>
+              <button type="button" className="icon-button" aria-label="Закрыть" onClick={() => setEditingId(null)}>
                 <CabinetIcon name="x" />
               </button>
             </div>
             <label>Название проекта
-              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, ПВЗ Wildberries" maxLength={60} autoFocus />
+              <input value={name} onChange={(event) => { setName(event.target.value); setError(""); }} placeholder="Например, ПВЗ Wildberries" maxLength={60} autoFocus />
             </label>
             <label>Описание
               <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Например, пункт выдачи" maxLength={120} />
             </label>
             {error && <p className="directory-error">{error}</p>}
             <div className="directory-modal__actions">
-              <button type="button" className="directory-btn directory-btn--ghost" onClick={() => setFormOpen(false)}>Отмена</button>
-              <button type="button" className="directory-btn directory-btn--primary" onClick={saveProject}>Сохранить</button>
+              <button type="button" className="directory-btn directory-btn--ghost" onClick={() => setEditingId(null)}>Отмена</button>
+              <button type="button" className="directory-btn directory-btn--primary" onClick={saveEditProject}>Сохранить</button>
             </div>
           </div>
         </div>
+      )}
+      {categoriesModalProject && (
+        <ProjectCategoriesModal
+          projectName={categoriesModalProject.name}
+          templateName={categoriesModalProject.templateName}
+          categories={categoriesModalProject.categories ?? buildEmptyProjectCategories()}
+          operations={operations}
+          onClose={() => setCategoriesModalProjectId(null)}
+          onAddCategory={(tab, catName) => onAddProjectCategory(categoriesModalProject.id, tab, catName)}
+          onRenameCategory={(tab, catId, nextName) => onRenameProjectCategory(categoriesModalProject.id, tab, catId, nextName)}
+          onToggleCategory={(tab, catId) => onToggleProjectCategory(categoriesModalProject.id, tab, catId)}
+          onDeleteCategory={(tab, catId) => onDeleteProjectCategory(categoriesModalProject.id, tab, catId)}
+        />
       )}
     </section>
   );
@@ -1890,16 +2067,41 @@ const initialLiveCategories: Record<CategoryTab, LiveCategory[]> = {
   ],
 };
 
-function SettingsContent({ categories, setCategories, operations }: {
+function SettingsContent({
+  categories,
+  setCategories,
+  projects,
+  operations,
+  onAddProjectCategory,
+  onRenameProjectCategory,
+  onToggleProjectCategory,
+  onDeleteProjectCategory,
+  onGlobalCategoryRenamed,
+}: {
   categories: Record<CategoryTab, LiveCategory[]>;
   setCategories: Dispatch<SetStateAction<Record<CategoryTab, LiveCategory[]>>>;
+  projects: DirectoryProject[];
   operations: Operation[];
+  onAddProjectCategory: (projectId: string, tab: ProjectCategoryTab, name: string) => boolean;
+  onRenameProjectCategory: (projectId: string, tab: ProjectCategoryTab, categoryId: string, nextName: string) => boolean;
+  onToggleProjectCategory: (projectId: string, tab: ProjectCategoryTab, categoryId: string) => void;
+  onDeleteProjectCategory: (projectId: string, tab: ProjectCategoryTab, categoryId: string) => void;
+  onGlobalCategoryRenamed: (tab: CategoryTab, previousName: string, nextName: string) => void;
 }) {
+  const [scopeId, setScopeId] = useState<string>("global");
   const [tab, setTab] = useState<CategoryTab>("expenses");
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
   const [pendingRemoval, setPendingRemoval] = useState<{ category: LiveCategory; count: number } | null>(null);
-  const list = categories[tab];
+
+  const scopedProject = scopeId === "global" ? null : projects.find((p) => p.id === scopeId) ?? null;
+  const effectiveBuckets = scopedProject
+    ? (scopedProject.categories ?? buildEmptyProjectCategories())
+    : categories;
+  const list = effectiveBuckets[tab];
+
   const showMessage = (text: string) => {
     setMessage(text);
     window.setTimeout(() => setMessage(""), 3000);
@@ -1915,31 +2117,76 @@ function SettingsContent({ categories, setCategories, operations }: {
       showMessage("Такая категория уже есть");
       return;
     }
-    setCategories((current) => ({ ...current, [tab]: [...current[tab], { id: "c-" + Date.now(), name: clean, system: false, active: true }] }));
+    if (scopedProject) {
+      onAddProjectCategory(scopedProject.id, tab, clean);
+    } else {
+      setCategories((current) => ({ ...current, [tab]: [...current[tab], { id: "c-" + Date.now(), name: clean, system: false, active: true }] }));
+    }
     setDraft("");
     showMessage("Категория «" + clean + "» добавлена");
   };
+
+  const saveRename = (category: LiveCategory) => {
+    const clean = editingValue.trim();
+    if (clean.length < 2) {
+      showMessage("Введите название от 2 символов");
+      return;
+    }
+    if (list.some((item) => item.id !== category.id && item.name.toLowerCase() === clean.toLowerCase())) {
+      showMessage("Такая категория уже есть");
+      return;
+    }
+    if (scopedProject) {
+      onRenameProjectCategory(scopedProject.id, tab, category.id, clean);
+    } else {
+      setCategories((current) => ({
+        ...current,
+        [tab]: current[tab].map((item) => (item.id === category.id ? { ...item, name: clean } : item)),
+      }));
+      if (category.name !== clean) onGlobalCategoryRenamed(tab, category.name, clean);
+    }
+    setEditingId(null);
+    setEditingValue("");
+    showMessage("Категория переименована в «" + clean + "»");
+  };
+
   const toggleCategory = (id: string) => {
-    setCategories((current) => ({ ...current, [tab]: current[tab].map((item) => (item.id === id ? { ...item, active: !item.active } : item)) }));
+    if (scopedProject) {
+      onToggleProjectCategory(scopedProject.id, tab, id);
+    } else {
+      setCategories((current) => ({ ...current, [tab]: current[tab].map((item) => (item.id === id ? { ...item, active: !item.active } : item)) }));
+    }
   };
 
   const removeCategory = (id: string) => {
     const target = list.find((item) => item.id === id);
     if (!target || target.system) return;
     const operationType: OperationType = tab === "expenses" ? "expense" : tab === "income" ? "income" : "tax";
-    const count = operations.filter((operation) => operation.type === operationType && operation.category === target.name).length;
+    const count = operations.filter((operation) =>
+      operation.type === operationType &&
+      operation.category === target.name &&
+      (!scopedProject || operation.project === scopedProject.name),
+    ).length;
     if (count > 0) {
       setPendingRemoval({ category: target, count });
       return;
     }
-    setCategories((current) => ({ ...current, [tab]: current[tab].filter((item) => item.id !== id) }));
+    if (scopedProject) {
+      onDeleteProjectCategory(scopedProject.id, tab, id);
+    } else {
+      setCategories((current) => ({ ...current, [tab]: current[tab].filter((item) => item.id !== id) }));
+    }
     showMessage("Категория «" + target.name + "» удалена");
   };
 
   const confirmCategoryRemoval = () => {
     if (!pendingRemoval) return;
     const target = pendingRemoval.category;
-    setCategories((current) => ({ ...current, [tab]: current[tab].filter((item) => item.id !== target.id) }));
+    if (scopedProject) {
+      onDeleteProjectCategory(scopedProject.id, tab, target.id);
+    } else {
+      setCategories((current) => ({ ...current, [tab]: current[tab].filter((item) => item.id !== target.id) }));
+    }
     setPendingRemoval(null);
     showMessage("Категория «" + target.name + "» удалена");
   };
@@ -1949,16 +2196,45 @@ function SettingsContent({ categories, setCategories, operations }: {
       <div className="section-page__intro directory__intro">
         <div>
           <h2>Живые справочники</h2>
-          <p>Управляйте категориями доходов, расходов и налогов</p>
+          <p>Управляйте общими категориями и категориями каждого проекта отдельно</p>
         </div>
       </div>
+
+      {projects.length > 0 && (
+        <div className="directory-scope-bar" role="group" aria-label="Область настройки категорий">
+          <button
+            type="button"
+            className={scopeId === "global" ? "is-active" : ""}
+            onClick={() => {
+              setScopeId("global");
+              setEditingId(null);
+            }}
+          >
+            Общий справочник
+          </button>
+          {projects.map((proj) => (
+            <button
+              key={proj.id}
+              type="button"
+              className={scopeId === proj.id ? "is-active" : ""}
+              onClick={() => {
+                setScopeId(proj.id);
+                setEditingId(null);
+              }}
+            >
+              {proj.name}{proj.archived ? " (архив)" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="directory-tabs" role="tablist" aria-label="Категории">
-        <button type="button" role="tab" aria-selected={tab === "expenses"} className={tab === "expenses" ? "is-active" : ""} onClick={() => setTab("expenses")}>Расходы<i>{categories.expenses.length}</i></button>
-        <button type="button" role="tab" aria-selected={tab === "income"} className={tab === "income" ? "is-active" : ""} onClick={() => setTab("income")}>Доходы<i>{categories.income.length}</i></button>
-        <button type="button" role="tab" aria-selected={tab === "taxes"} className={tab === "taxes" ? "is-active" : ""} onClick={() => setTab("taxes")}>Налоги<i>{categories.taxes.length}</i></button>
+        <button type="button" role="tab" aria-selected={tab === "expenses"} className={tab === "expenses" ? "is-active" : ""} onClick={() => { setTab("expenses"); setEditingId(null); }}>Расходы<i>{effectiveBuckets.expenses.length}</i></button>
+        <button type="button" role="tab" aria-selected={tab === "income"} className={tab === "income" ? "is-active" : ""} onClick={() => { setTab("income"); setEditingId(null); }}>Доходы<i>{effectiveBuckets.income.length}</i></button>
+        <button type="button" role="tab" aria-selected={tab === "taxes"} className={tab === "taxes" ? "is-active" : ""} onClick={() => { setTab("taxes"); setEditingId(null); }}>Налоги<i>{effectiveBuckets.taxes.length}</i></button>
       </div>
       <div className="directory-add">
-        <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название новой категории" aria-label="Название новой категории" maxLength={48} onKeyDown={(e) => { if (e.key === "Enter") addCategory(); }} />
+        <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={scopedProject ? `Новая категория для «${scopedProject.name}»` : "Название новой категории"} aria-label="Название новой категории" maxLength={48} onKeyDown={(e) => { if (e.key === "Enter") addCategory(); }} />
         <button type="button" className="cabinet-primary" onClick={addCategory}>
           <CabinetIcon name="plus" />
           <span>Добавить</span>
@@ -1971,39 +2247,80 @@ function SettingsContent({ categories, setCategories, operations }: {
         </div>
       )}
       <div className="category-list">
-        {list.map((category) => (
-          <div key={category.id} className={category.active ? "category-row" : "category-row category-row--hidden"}>
-            <span className="category-row__text">
-              <strong>{category.name}</strong>
-              <small>{category.system ? "Системная категория" : "Пользовательская категория"}</small>
-            </span>
-            {category.system && (
-              <span className="system-badge">
-                <CabinetIcon name="lock" />
-                Системная
-              </span>
-            )}
-            <label className="switch">
-              <input type="checkbox" checked={category.active} onChange={() => toggleCategory(category.id)} aria-label={`${category.name}: ${category.active ? "Активна" : "Скрыта"}`} />
-              <span className="switch__track"><span className="switch__thumb" /></span>
-              <em>{category.active ? "Активна" : "Скрыта"}</em>
-            </label>
-            {category.system ? (
-              <span className="category-lock" aria-label="Системную категорию нельзя удалить">
-                <CabinetIcon name="lock" />
-              </span>
-            ) : (
-              <button type="button" className="category-delete" aria-label={"Удалить " + category.name} onClick={() => removeCategory(category.id)}>
-                <CabinetIcon name="trash" />
-                <span>Удалить</span>
-              </button>
-            )}
+        {list.length === 0 ? (
+          <div className="project-categories-empty">
+            <strong>В этом разделе проекта пока нет категорий</strong>
+            <p>Добавьте новую категорию выше или настройте её прямо при создании операции.</p>
           </div>
-        ))}
+        ) : (
+          list.map((category) => (
+            <div key={category.id} className={category.active ? "category-row" : "category-row category-row--hidden"}>
+              {editingId === category.id ? (
+                <div className="category-edit-inline">
+                  <input
+                    value={editingValue}
+                    onChange={(event) => setEditingValue(event.target.value)}
+                    maxLength={48}
+                    aria-label="Новое название категории"
+                    autoFocus
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") saveRename(category);
+                      if (event.key === "Escape") setEditingId(null);
+                    }}
+                  />
+                  <button type="button" className="directory-btn directory-btn--primary" onClick={() => saveRename(category)}>Сохранить</button>
+                  <button type="button" className="directory-btn directory-btn--ghost" onClick={() => setEditingId(null)}>Отмена</button>
+                </div>
+              ) : (
+                <>
+                  <span className="category-row__text">
+                    <strong>{category.name}</strong>
+                    <small>{category.system ? "Системная категория" : scopedProject ? `Категория проекта «${scopedProject.name}»` : "Пользовательская категория"}</small>
+                  </span>
+                  {category.system && (
+                    <span className="system-badge">
+                      <CabinetIcon name="lock" />
+                      Системная
+                    </span>
+                  )}
+                  <label className="switch">
+                    <input type="checkbox" checked={category.active} onChange={() => toggleCategory(category.id)} aria-label={`${category.name}: ${category.active ? "Активна" : "Скрыта"}`} />
+                    <span className="switch__track"><span className="switch__thumb" /></span>
+                    <em>{category.active ? "Активна" : "Скрыта"}</em>
+                  </label>
+                  {!category.system && (
+                    <button
+                      type="button"
+                      className="directory-btn directory-btn--ghost project-cat-action"
+                      aria-label={"Переименовать " + category.name}
+                      onClick={() => {
+                        setEditingId(category.id);
+                        setEditingValue(category.name);
+                      }}
+                    >
+                      <CabinetIcon name="edit" />
+                      <span>Изменить</span>
+                    </button>
+                  )}
+                  {category.system ? (
+                    <span className="category-lock" aria-label="Системную категорию нельзя удалить">
+                      <CabinetIcon name="lock" />
+                    </span>
+                  ) : (
+                    <button type="button" className="category-delete" aria-label={"Удалить " + category.name} onClick={() => removeCategory(category.id)}>
+                      <CabinetIcon name="trash" />
+                      <span>Удалить</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          ))
+        )}
       </div>
       <div className="directory-hint">
         <CabinetIcon name="info" />
-        <p>Системные категории можно скрывать тумблером, но нельзя удалять</p>
+        <p>{scopedProject ? "Изменения в этом списке применяются только к выбранному проекту" : "Системные категории можно скрывать тумблером, но нельзя удалять"}</p>
       </div>
       {pendingRemoval && (
         <div className="directory-modal" role="dialog" aria-modal="true" aria-labelledby="category-delete-title" onClick={() => setPendingRemoval(null)}>
@@ -2053,6 +2370,21 @@ function isOperation(value: unknown): value is Operation {
     && (value.paidByPersonalFunds === undefined || typeof value.paidByPersonalFunds === "boolean");
 }
 
+function isProjectCategoryItem(value: unknown): value is ProjectCategoryItem {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.name === "string"
+    && (value.type === undefined || value.type === "INCOME" || value.type === "EXPENSE" || value.type === "TAX")
+    && typeof value.system === "boolean"
+    && typeof value.active === "boolean";
+}
+
+const isProjectCategoryBuckets = (value: unknown): value is ProjectCategoryBuckets =>
+  isRecord(value) && (["expenses", "income", "taxes"] as const).every((tab) => {
+    const list = value[tab];
+    return Array.isArray(list) && list.every(isProjectCategoryItem);
+  });
+
 function isDirectoryProject(value: unknown): value is DirectoryProject {
   return isRecord(value)
     && typeof value.id === "string"
@@ -2060,7 +2392,10 @@ function isDirectoryProject(value: unknown): value is DirectoryProject {
     && typeof value.description === "string"
     && typeof value.archived === "boolean"
     && typeof value.operations === "number" && Number.isFinite(value.operations)
-    && (value.color === undefined || typeof value.color === "string");
+    && (value.color === undefined || typeof value.color === "string")
+    && (value.templateId === undefined || value.templateId === null || value.templateId === "pvz" || value.templateId === "marketplace_seller" || value.templateId === "universal_business")
+    && (value.templateName === undefined || typeof value.templateName === "string")
+    && (value.categories === undefined || isProjectCategoryBuckets(value.categories));
 }
 
 function isLiveCategory(value: unknown): value is LiveCategory {
@@ -2086,6 +2421,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const [reviewFileName, setReviewFileName] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingOperation, setEditingOperation] = useState<Operation | null>(null);
+  const [drawerInitialProject, setDrawerInitialProject] = useState<string | undefined>(undefined);
   const [opNotice, setOpNotice] = useState("");
   const [pendingDeletion, setPendingDeletion] = useState<Operation | null>(null);
   const [deletingOperation, setDeletingOperation] = useState(false);
@@ -2139,6 +2475,32 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
     tax: liveCategories.taxes.filter((c) => c.active).map((c) => c.name),
   };
 
+  const mergedImportCategories: Record<CategoryTab, LiveCategory[]> = (["expenses", "income", "taxes"] as const).reduce(
+    (acc, tabKey) => {
+      const seen = new Set<string>();
+      const combined: LiveCategory[] = [];
+      for (const item of liveCategories[tabKey]) {
+        const norm = item.name.trim().toLowerCase();
+        if (!seen.has(norm)) {
+          seen.add(norm);
+          combined.push(item);
+        }
+      }
+      for (const proj of projects) {
+        for (const item of proj.categories?.[tabKey] ?? []) {
+          const norm = item.name.trim().toLowerCase();
+          if (!seen.has(norm)) {
+            seen.add(norm);
+            combined.push({ id: item.id, name: item.name, system: item.system, active: item.active });
+          }
+        }
+      }
+      acc[tabKey] = combined;
+      return acc;
+    },
+    { expenses: [], income: [], taxes: [] } as Record<CategoryTab, LiveCategory[]>,
+  );
+
   const sectionTitles: Record<CabinetSection, [string, string]> = {
     dashboard: [`Добрый день, ${userName}`, "Вот что происходит с финансами вашего бизнеса"],
     operations: ["Операции", "Контролируйте каждое движение денег"],
@@ -2147,26 +2509,154 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
     settings: ["Настройки", "Справочники и параметры учёта"],
   };
 
-  const createProject = (name: string, description: string): DirectoryProject => {
+  const createProject = (
+    name: string,
+    description: string,
+    template: IndustryProjectTemplate | null = null,
+  ): DirectoryProject => {
+    const projectId = "p-" + Date.now();
     const newProject: DirectoryProject = {
-      id: "p-" + Date.now(),
+      id: projectId,
       name,
       description: description || "Новый проект",
       archived: false,
       operations: 0,
-      color: projectColors[projects.length % projectColors.length],
+      color: template?.accentColor ?? projectColors[projects.length % projectColors.length],
+      templateId: template?.id ?? null,
+      templateName: template?.name,
+      categories: template
+        ? buildProjectCategoriesFromTemplate(projectId, template)
+        : buildEmptyProjectCategories(),
     };
     setProjects((current) => [...current, newProject]);
     return newProject;
   };
 
+  const addProjectCategory = (projectId: string, tab: ProjectCategoryTab, rawName: string): boolean => {
+    const clean = rawName.trim();
+    if (clean.length < 2) return false;
+    const targetProject = projects.find((item) => item.id === projectId);
+    if (!targetProject) return false;
+    const existingList = (targetProject.categories ?? buildEmptyProjectCategories())[tab];
+    if (existingList.some((item) => item.name.toLowerCase() === clean.toLowerCase())) {
+      return false;
+    }
+    const categoryType = tab === "income" ? "INCOME" : tab === "taxes" ? "TAX" : "EXPENSE";
+    const newItem: ProjectCategoryItem = {
+      id: `${projectId}-c-${Date.now()}`,
+      name: clean,
+      type: categoryType,
+      system: false,
+      active: true,
+    };
+    setProjects((current) =>
+      current.map((item) => {
+        if (item.id !== projectId) return item;
+        const buckets = item.categories ?? buildEmptyProjectCategories();
+        return {
+          ...item,
+          categories: {
+            ...buckets,
+            [tab]: [...buckets[tab], newItem],
+          },
+        };
+      }),
+    );
+    return true;
+  };
+
+  const renameProjectCategory = (
+    projectId: string,
+    tab: ProjectCategoryTab,
+    categoryId: string,
+    rawNextName: string,
+  ): boolean => {
+    const clean = rawNextName.trim();
+    if (clean.length < 2) return false;
+    const targetProject = projects.find((item) => item.id === projectId);
+    if (!targetProject) return false;
+    const buckets = targetProject.categories ?? buildEmptyProjectCategories();
+    const currentItem = buckets[tab].find((c) => c.id === categoryId);
+    if (!currentItem) return false;
+    if (buckets[tab].some((c) => c.id !== categoryId && c.name.toLowerCase() === clean.toLowerCase())) {
+      return false;
+    }
+
+    const previousName = currentItem.name;
+    setProjects((current) =>
+      current.map((item) => {
+        if (item.id !== projectId) return item;
+        const projBuckets = item.categories ?? buildEmptyProjectCategories();
+        return {
+          ...item,
+          categories: {
+            ...projBuckets,
+            [tab]: projBuckets[tab].map((c) => (c.id === categoryId ? { ...c, name: clean } : c)),
+          },
+        };
+      }),
+    );
+
+    if (previousName !== clean) {
+      const opType: OperationType = tab === "income" ? "income" : tab === "taxes" ? "tax" : "expense";
+      setOperations((current) =>
+        current.map((op) =>
+          op.project === targetProject.name && op.type === opType && op.category === previousName
+            ? { ...op, category: clean }
+            : op,
+        ),
+      );
+    }
+    return true;
+  };
+
+  const toggleProjectCategory = (projectId: string, tab: ProjectCategoryTab, categoryId: string) => {
+    setProjects((current) =>
+      current.map((item) => {
+        if (item.id !== projectId) return item;
+        const buckets = item.categories ?? buildEmptyProjectCategories();
+        return {
+          ...item,
+          categories: {
+            ...buckets,
+            [tab]: buckets[tab].map((c) => (c.id === categoryId ? { ...c, active: !c.active } : c)),
+          },
+        };
+      }),
+    );
+  };
+
+  const deleteProjectCategory = (projectId: string, tab: ProjectCategoryTab, categoryId: string) => {
+    setProjects((current) =>
+      current.map((item) => {
+        if (item.id !== projectId) return item;
+        const buckets = item.categories ?? buildEmptyProjectCategories();
+        return {
+          ...item,
+          categories: {
+            ...buckets,
+            [tab]: buckets[tab].filter((c) => c.id !== categoryId),
+          },
+        };
+      }),
+    );
+  };
+
   const openNewOperation = () => {
     setEditingOperation(null);
+    setDrawerInitialProject(undefined);
+    setDrawerOpen(true);
+  };
+
+  const openNewOperationForProject = (projectName: string) => {
+    setEditingOperation(null);
+    setDrawerInitialProject(projectName);
     setDrawerOpen(true);
   };
 
   const openEditOperation = (operation: Operation) => {
     setEditingOperation(operation);
+    setDrawerInitialProject(undefined);
     setDrawerOpen(true);
   };
 
@@ -2240,15 +2730,49 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
           )}
           {section === "dashboard" && <DashboardContent projects={projects} operations={operations} periodType={periodType} selectedPeriod={selectedPeriod} onPeriodChange={(nextType, nextPeriod) => { setPeriodType(nextType); setSelectedPeriod(nextPeriod); }} selectedProjects={selectedProjectNames} onSelectedProjectsChange={setSelectedProjectNames} />}
           {section === "operations" && <OperationsContent operations={operations} projects={projects} onAdd={openNewOperation} onDelete={setPendingDeletion} onEdit={openEditOperation} periodType={periodType} selectedPeriod={selectedPeriod} />}
-          {section === "projects" && <ProjectsContent projects={projects} setProjects={setProjects} onProjectRenamed={(previousName, nextName) => {
-            setOperations((current) => current.map((operation) => operation.project === previousName ? { ...operation, project: nextName } : operation));
-            setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
-          }} />}
-          {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
+          {section === "projects" && (
+            <ProjectsContent
+              projects={projects}
+              setProjects={setProjects}
+              operations={operations}
+              onProjectRenamed={(previousName, nextName) => {
+                setOperations((current) => current.map((operation) => operation.project === previousName ? { ...operation, project: nextName } : operation));
+                setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
+              }}
+              onCreateProject={createProject}
+              onOpenOperationForProject={openNewOperationForProject}
+              onAddProjectCategory={addProjectCategory}
+              onRenameProjectCategory={renameProjectCategory}
+              onToggleProjectCategory={toggleProjectCategory}
+              onDeleteProjectCategory={deleteProjectCategory}
+            />
+          )}
+          {section === "settings" && (
+            <SettingsContent
+              categories={liveCategories}
+              setCategories={setLiveCategories}
+              projects={projects}
+              operations={operations}
+              onAddProjectCategory={addProjectCategory}
+              onRenameProjectCategory={renameProjectCategory}
+              onToggleProjectCategory={toggleProjectCategory}
+              onDeleteProjectCategory={deleteProjectCategory}
+              onGlobalCategoryRenamed={(tabKey, previousName, nextName) => {
+                const opType: OperationType = tabKey === "income" ? "income" : tabKey === "taxes" ? "tax" : "expense";
+                setOperations((current) =>
+                  current.map((op) => {
+                    if (op.type !== opType || op.category !== previousName) return op;
+                    const projObj = projects.find((p) => p.name === op.project);
+                    return projObj?.categories ? op : { ...op, category: nextName };
+                  }),
+                );
+              }}
+            />
+          )}
           {section === "statement" && (
             <BankStatementUpload
               projects={projects}
-              categories={liveCategories}
+              categories={mergedImportCategories}
               existingOperations={operations}
               onImportConfirmed={(importedOps: LedgerOperationInput[]) => {
                 if (importedOps.length === 0) return;
@@ -2302,11 +2826,15 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
         )}
         {drawerOpen && (
           <OperationDrawer
-            key={editingOperation?.id ?? "new-operation"}
+            key={editingOperation?.id ?? `new-operation-${drawerInitialProject ?? "default"}`}
             operation={editingOperation}
+            initialProject={drawerInitialProject}
             projects={projects}
             categories={activeCategoryNames}
-            onClose={() => setDrawerOpen(false)}
+            onClose={() => {
+              setDrawerOpen(false);
+              setDrawerInitialProject(undefined);
+            }}
             onSaved={(op) => {
               if (editingOperation) {
                 setOperations((current) => current.map((operation) => operation.id === op.id ? op : operation));
@@ -2326,9 +2854,11 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
                 setOpNotice(`Операция «${op.comment}» добавлена`);
               }
               setDrawerOpen(false);
+              setDrawerInitialProject(undefined);
               window.setTimeout(() => setOpNotice(""), 3200);
             }}
             onCreateProject={createProject}
+            onAddProjectCategory={addProjectCategory}
           />
         )}
       </main>

@@ -52,74 +52,72 @@ export const IMPORT_OPERATION_TYPES = [
 export type ImportOperationType = (typeof IMPORT_OPERATION_TYPES)[number]
 
 export type ApiImportOperationTypeCode =
-  | "BUSINESS_INCOME"
-  | "BUSINESS_EXPENSE"
-  | "PERSONAL_EXPENSE"
-  | "INTERNAL_TRANSFER"
-  | "SUPPLIER_REFUND"
-  | "CUSTOMER_REFUND"
-  | "BANK_FEE"
-  | "TAX_PAYMENT"
-  | "CASH_WITHDRAWAL"
-  | "INDIVIDUAL_TRANSFER"
-  | "LOAN_RECEIPT"
-  | "LOAN_REPAYMENT"
-  | "UNDEFINED"
+  | "income"
+  | "expense"
+  | "transfer"
+  | "supplier_refund"
+  | "customer_refund"
+  | "bank_fee"
+  | "tax_payment"
+  | "loan_received"
+  | "loan_repayment"
+  | "cash_withdrawal"
+  | "individual_transfer"
+  | "undefined"
 
 export const IMPORT_OPERATION_TYPE_TO_API_CODE: Record<
   ImportOperationType,
   ApiImportOperationTypeCode
 > = {
-  Доход: "BUSINESS_INCOME",
-  Расход: "BUSINESS_EXPENSE",
-  "Личный расход": "PERSONAL_EXPENSE",
-  "Перевод между собственными счетами": "INTERNAL_TRANSFER",
-  "Возврат от поставщика": "SUPPLIER_REFUND",
-  "Возврат покупателю": "CUSTOMER_REFUND",
-  "Банковская комиссия": "BANK_FEE",
-  "Налоговый платёж": "TAX_PAYMENT",
-  "Снятие наличных": "CASH_WITHDRAWAL",
-  "Перевод физлицу": "INDIVIDUAL_TRANSFER",
-  "Получение кредита": "LOAN_RECEIPT",
-  "Погашение кредита": "LOAN_REPAYMENT",
-  "Неопределённая операция": "UNDEFINED",
+  Доход: "income",
+  Расход: "expense",
+  "Личный расход": "expense",
+  "Перевод между собственными счетами": "transfer",
+  "Возврат от поставщика": "supplier_refund",
+  "Возврат покупателю": "customer_refund",
+  "Банковская комиссия": "bank_fee",
+  "Налоговый платёж": "tax_payment",
+  "Снятие наличных": "cash_withdrawal",
+  "Перевод физлицу": "individual_transfer",
+  "Получение кредита": "loan_received",
+  "Погашение кредита": "loan_repayment",
+  "Неопределённая операция": "undefined",
 }
 
 export const API_CODE_TO_IMPORT_OPERATION_TYPE: Record<
   ApiImportOperationTypeCode,
   ImportOperationType
 > = {
-  BUSINESS_INCOME: "Доход",
-  BUSINESS_EXPENSE: "Расход",
-  PERSONAL_EXPENSE: "Личный расход",
-  INTERNAL_TRANSFER: "Перевод между собственными счетами",
-  SUPPLIER_REFUND: "Возврат от поставщика",
-  CUSTOMER_REFUND: "Возврат покупателю",
-  BANK_FEE: "Банковская комиссия",
-  TAX_PAYMENT: "Налоговый платёж",
-  CASH_WITHDRAWAL: "Снятие наличных",
-  INDIVIDUAL_TRANSFER: "Перевод физлицу",
-  LOAN_RECEIPT: "Получение кредита",
-  LOAN_REPAYMENT: "Погашение кредита",
-  UNDEFINED: "Неопределённая операция",
+  income: "Доход",
+  expense: "Расход",
+  transfer: "Перевод между собственными счетами",
+  supplier_refund: "Возврат от поставщика",
+  customer_refund: "Возврат покупателю",
+  bank_fee: "Банковская комиссия",
+  tax_payment: "Налоговый платёж",
+  cash_withdrawal: "Снятие наличных",
+  individual_transfer: "Перевод физлицу",
+  loan_received: "Получение кредита",
+  loan_repayment: "Погашение кредита",
+  undefined: "Неопределённая операция",
 }
 
 export const OWNERSHIP_OPTIONS = ["Бизнес", "Личное", "Неопределённое"] as const
 
 export type OwnershipStatus = (typeof OWNERSHIP_OPTIONS)[number]
 
-export type ApiOwnershipCode = "BUSINESS" | "PERSONAL" | "UNKNOWN"
+export type ApiOwnershipCode = "business" | "personal" | "undefined"
 
 export const OWNERSHIP_TO_API_CODE: Record<OwnershipStatus, ApiOwnershipCode> = {
-  Бизнес: "BUSINESS",
-  Личное: "PERSONAL",
-  Неопределённое: "UNKNOWN",
+  Бизнес: "business",
+  Личное: "personal",
+  Неопределённое: "undefined",
 }
 
 export const API_CODE_TO_OWNERSHIP: Record<ApiOwnershipCode, OwnershipStatus> = {
-  BUSINESS: "Бизнес",
-  PERSONAL: "Личное",
-  UNKNOWN: "Неопределённое",
+  business: "Бизнес",
+  personal: "Личное",
+  undefined: "Неопределённое",
 }
 
 export type ImportedOperationStatus = "review" | "confirmed" | "excluded"

@@ -4,7 +4,9 @@ export const API_ENDPOINTS = {
   transactions: "/transactions",
   projects: "/projects",
   categories: "/categories",
-  importUpload: "/api/imports/upload",
-  importBatches: "/api/imports",
+  importUpload: "/api/import/upload",
+  importBatches: "/api/import/batches",
+  importTransactions: "/api/import/transactions",
+  importReportsSummary: "/api/import/reports/summary",
   bankAccounts: "/api/accounts",
 } as const

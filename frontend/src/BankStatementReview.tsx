@@ -305,6 +305,101 @@ export default function BankStatementReview({
     ]
   }
 
+  const applyFieldPatch = (
+    operation: ImportedOperation,
+    patch: {
+      type?: ImportOperationType
+      category?: string
+      project?: string
+      ownership?: OwnershipStatus
+      paidByPersonalFunds?: boolean
+    },
+  ): ImportedOperation => {
+    let nextType = patch.type ?? operation.type
+    let nextCategory = patch.category ?? operation.category
+    const nextProject = patch.project ?? operation.project
+    let nextOwnership = patch.ownership ?? operation.ownership
+    let nextPaidByPersonalFunds =
+      patch.paidByPersonalFunds ?? operation.paidByPersonalFunds
+    let nextAmountKind = operation.amountKind
+
+    if (patch.type !== undefined) {
+      if (nextType === "Личный расход") {
+        nextOwnership = "Личное"
+        nextPaidByPersonalFunds = false
+        nextAmountKind = "expense"
+      } else if (nextType === "Перевод между собственными счетами") {
+        nextAmountKind = "transfer"
+        nextPaidByPersonalFunds = false
+      } else if (
+        nextType === "Доход" ||
+        nextType === "Возврат от поставщика" ||
+        nextType === "Получение кредита"
+      ) {
+        nextAmountKind = "income"
+        if (nextOwnership === "Личное") nextOwnership = "Бизнес"
+        nextPaidByPersonalFunds = false
+      } else if (
+        nextType === "Расход" ||
+        nextType === "Банковская комиссия" ||
+        nextType === "Налоговый платёж" ||
+        nextType === "Возврат покупателю" ||
+        nextType === "Погашение кредита"
+      ) {
+        nextAmountKind = "expense"
+        if (nextOwnership === "Личное") nextOwnership = "Бизнес"
+        if (batch.accountType === "personal" && nextType !== "Погашение кредита") {
+          nextPaidByPersonalFunds = true
+        }
+      } else {
+        nextAmountKind = operation.direction === "credit" ? "income" : "expense"
+      }
+    }
+
+    if (patch.ownership !== undefined) {
+      if (nextOwnership === "Личное") {
+        nextPaidByPersonalFunds = false
+        if (nextType === "Расход") nextType = "Личный расход"
+      } else if (nextOwnership === "Бизнес") {
+        if (nextType === "Личный расход") nextType = "Расход"
+        if (
+          batch.accountType === "personal" &&
+          nextAmountKind === "expense" &&
+          patch.paidByPersonalFunds === undefined
+        ) {
+          nextPaidByPersonalFunds = true
+        }
+      }
+    }
+
+    if (nextType === "Налоговый платёж" && nextCategory === "Неопределённое") {
+      nextCategory = categories.taxes[0]?.name ?? "Налоги"
+    }
+
+    let corrections = operation.corrections
+    corrections = recordCorrection(corrections, "type", operation.type, nextType)
+    corrections = recordCorrection(corrections, "category", operation.category, nextCategory)
+    corrections = recordCorrection(corrections, "project", operation.project, nextProject)
+    corrections = recordCorrection(corrections, "ownership", operation.ownership, nextOwnership)
+    corrections = recordCorrection(
+      corrections,
+      "paidByPersonalFunds",
+      String(operation.paidByPersonalFunds),
+      String(nextPaidByPersonalFunds),
+    )
+
+    return {
+      ...operation,
+      type: nextType,
+      category: nextCategory,
+      project: nextProject,
+      ownership: nextOwnership,
+      paidByPersonalFunds: nextPaidByPersonalFunds,
+      amountKind: nextAmountKind,
+      corrections,
+    }
+  }
+
   const handleUpdateField = (
     id: string,
     patch: {
@@ -315,109 +410,27 @@ export default function BankStatementReview({
       paidByPersonalFunds?: boolean
     },
   ) => {
-    let apiPatch: OperationUpdatePatch = {}
+    const target = operations.find((operation) => operation.id === id)
+    if (!target) return
+
+    const updated = applyFieldPatch(target, patch)
+    const apiPatch: OperationUpdatePatch = {}
+    if (updated.type !== target.type) apiPatch.type = updated.type
+    if (updated.category !== target.category) apiPatch.category = updated.category
+    if (updated.project !== target.project) apiPatch.project = updated.project
+    if (updated.ownership !== target.ownership) apiPatch.ownership = updated.ownership
 
     setOperations((current) =>
-      current.map((operation) => {
-        if (operation.id !== id) return operation
-
-        let nextType = patch.type ?? operation.type
-        let nextCategory = patch.category ?? operation.category
-        const nextProject = patch.project ?? operation.project
-        let nextOwnership = patch.ownership ?? operation.ownership
-        let nextPaidByPersonalFunds =
-          patch.paidByPersonalFunds ?? operation.paidByPersonalFunds
-        let nextAmountKind = operation.amountKind
-
-        if (patch.type !== undefined) {
-          if (nextType === "Личный расход") {
-            nextOwnership = "Личное"
-            nextPaidByPersonalFunds = false
-            nextAmountKind = "expense"
-          } else if (nextType === "Перевод между собственными счетами") {
-            nextAmountKind = "transfer"
-            nextPaidByPersonalFunds = false
-          } else if (
-            nextType === "Доход" ||
-            nextType === "Возврат от поставщика" ||
-            nextType === "Получение кредита"
-          ) {
-            nextAmountKind = "income"
-            if (nextOwnership === "Личное") nextOwnership = "Бизнес"
-            nextPaidByPersonalFunds = false
-          } else if (
-            nextType === "Расход" ||
-            nextType === "Банковская комиссия" ||
-            nextType === "Налоговый платёж" ||
-            nextType === "Возврат покупателю" ||
-            nextType === "Погашение кредита"
-          ) {
-            nextAmountKind = "expense"
-            if (nextOwnership === "Личное") nextOwnership = "Бизнес"
-            if (batch.accountType === "personal" && nextType !== "Погашение кредита") {
-              nextPaidByPersonalFunds = true
-            }
-          } else {
-            nextAmountKind = operation.direction === "credit" ? "income" : "expense"
-          }
-        }
-
-        if (patch.ownership !== undefined) {
-          if (nextOwnership === "Личное") {
-            nextPaidByPersonalFunds = false
-            if (nextType === "Расход") nextType = "Личный расход"
-          } else if (nextOwnership === "Бизнес") {
-            if (nextType === "Личный расход") nextType = "Расход"
-            if (
-              batch.accountType === "personal" &&
-              nextAmountKind === "expense" &&
-              patch.paidByPersonalFunds === undefined
-            ) {
-              nextPaidByPersonalFunds = true
-            }
-          }
-        }
-
-        if (nextType === "Налоговый платёж" && nextCategory === "Неопределённое") {
-          nextCategory = categories.taxes[0]?.name ?? "Налоги"
-        }
-
-        let corrections = operation.corrections
-        corrections = recordCorrection(corrections, "type", operation.type, nextType)
-        corrections = recordCorrection(corrections, "category", operation.category, nextCategory)
-        corrections = recordCorrection(corrections, "project", operation.project, nextProject)
-        corrections = recordCorrection(corrections, "ownership", operation.ownership, nextOwnership)
-        corrections = recordCorrection(
-          corrections,
-          "paidByPersonalFunds",
-          String(operation.paidByPersonalFunds),
-          String(nextPaidByPersonalFunds),
-        )
-
-        apiPatch = {
-          type: nextType,
-          category: nextCategory,
-          project: nextProject,
-          ownership: nextOwnership,
-          paidByPersonalFunds: nextPaidByPersonalFunds,
-        }
-
-        return {
-          ...operation,
-          type: nextType,
-          category: nextCategory,
-          project: nextProject,
-          ownership: nextOwnership,
-          paidByPersonalFunds: nextPaidByPersonalFunds,
-          amountKind: nextAmountKind,
-          corrections,
-        }
-      }),
+      current.map((operation) =>
+        operation.id === id ? applyFieldPatch(operation, patch) : operation,
+      ),
     )
 
-    importApi.updateOperation(batch.id, id, apiPatch).catch(() => {
-      flashNotice("Не удалось сохранить изменение на сервере", "error")
-    })
+    if (Object.keys(apiPatch).length > 0) {
+      importApi.updateOperation(batch.id, id, apiPatch, { projects, categories }).catch(() => {
+        flashNotice("Не удалось сохранить изменение на сервере", "error")
+      })
+    }
   }
 
   const confirmOperations = (ids: string[], customNotice?: string) => {
@@ -447,7 +460,7 @@ export default function BankStatementReview({
     )
 
     importApi
-      .bulkUpdateOperations(batch.id, validIds, { status: "confirmed" })
+      .bulkUpdateOperations(batch.id, validIds, { status: "confirmed" }, { projects, categories })
       .catch(() => flashNotice("Не удалось обновить статус на сервере", "error"))
   }
 
@@ -468,7 +481,7 @@ export default function BankStatementReview({
     )
 
     importApi
-      .bulkUpdateOperations(batch.id, ids, { status: "excluded" })
+      .bulkUpdateOperations(batch.id, ids, { status: "excluded" }, { projects, categories })
       .catch(() => flashNotice("Не удалось исключить операции на сервере", "error"))
   }
 
@@ -484,7 +497,7 @@ export default function BankStatementReview({
     flashNotice("Операция возвращена на проверку")
 
     importApi
-      .updateOperation(batch.id, id, { status: "review" })
+      .updateOperation(batch.id, id, { status: "review" }, { projects, categories })
       .catch(() => flashNotice("Не удалось вернуть статус на сервере", "error"))
   }
 
@@ -518,7 +531,7 @@ export default function BankStatementReview({
     flashNotice("Дубликат исключён из импорта")
 
     importApi
-      .updateOperation(batch.id, operation.id, { status: "excluded" })
+      .updateOperation(batch.id, operation.id, { status: "excluded" }, { projects, categories })
       .catch(() => flashNotice("Не удалось обновить дубликат на сервере", "error"))
   }
 
@@ -534,7 +547,7 @@ export default function BankStatementReview({
     flashNotice("Операция оставлена как новая — можно проверять и подтверждать")
 
     importApi
-      .updateOperation(batch.id, operation.id, { duplicate: undefined })
+      .updateOperation(batch.id, operation.id, { duplicate: undefined }, { projects, categories })
       .catch(() => flashNotice("Не удалось обновить дубликат на сервере", "error"))
   }
 

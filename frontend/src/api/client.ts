@@ -11,10 +11,19 @@ export type ApiError = {
   details?: unknown
 }
 
-const DEFAULT_BASE_URL = "http://localhost:3000/api"
+const DEFAULT_BASE_URL = "http://localhost:8000"
 
 export const API_BASE_URL =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) || DEFAULT_BASE_URL
+
+export function buildApiUrl(endpoint: string, baseUrl = API_BASE_URL): string {
+  let cleanBase = baseUrl.replace(/\/+$/, "")
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`
+  if (cleanBase.endsWith("/api") && cleanEndpoint.startsWith("/api/")) {
+    cleanBase = cleanBase.slice(0, -4)
+  }
+  return `${cleanBase}${cleanEndpoint}`
+}
 
 export async function apiRequest<T>(
   endpoint: string,
@@ -24,17 +33,34 @@ export async function apiRequest<T>(
   const token = typeof window !== "undefined" ? window.localStorage.getItem("token") : null
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method,
-    signal,
-    headers: {
-      Accept: "application/json",
-      ...(token && !headers?.Authorization ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-      ...(body !== undefined && !isFormData ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
-  })
+  let response: Response
+  try {
+    response = await fetch(buildApiUrl(endpoint), {
+      method,
+      signal,
+      headers: {
+        Accept: "application/json",
+        ...(token && !headers?.Authorization ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+        ...(body !== undefined && !isFormData ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
+    })
+  } catch (error) {
+    if (
+      (error instanceof DOMException && error.name === "AbortError") ||
+      (error instanceof Error && error.name === "AbortError") ||
+      signal?.aborted
+    ) {
+      throw error
+    }
+    const networkError: ApiError = {
+      message: "Не удалось подключиться к серверу. Проверьте, что бэкенд запущен и доступен.",
+      status: 0,
+      details: error instanceof Error ? error.message : error,
+    }
+    throw networkError
+  }
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "")
