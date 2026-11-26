@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowDownToLine, ExternalLink, FileSpreadsheet, FileText, Heart, Search, X } from "lucide-react";
 import CustomSelect from "./CustomSelect";
 
@@ -20,6 +20,7 @@ type FinancialTemplate = {
   category: TemplateCategory;
   format: "XLSX" | "Google Sheets" | "PDF";
   source: string;
+  sourceUrl?: string;
   action: TemplateAction;
 };
 
@@ -167,6 +168,38 @@ const actionLabels: Record<TemplateAction, string> = {
   source: "Перейти к источнику",
 };
 
+const sourceUrls: Record<string, string> = {
+  Adesk: "https://adesk.ru",
+};
+
+const templatesWithSources = templates.map((template) => ({
+  ...template,
+  sourceUrl: sourceUrls[template.source],
+}));
+
+const categoryDetails: Record<TemplateCategory, { tasks: string; audience: string }> = {
+  "Учёт доходов и расходов": {
+    tasks: "Фиксировать операции, распределять их по статьям и отслеживать остаток денежных средств.",
+    audience: "Предпринимателям и небольшим компаниям, которым нужен простой регулярный учёт.",
+  },
+  "Управленческая отчётность": {
+    tasks: "Сводить финансовые показатели за период и анализировать доходы, расходы и денежные потоки.",
+    audience: "Руководителям и владельцам бизнеса, которые принимают решения на основе финансовых результатов.",
+  },
+  "Финансовое планирование": {
+    tasks: "Планировать будущие доходы и расходы, прогнозировать денежный поток и сравнивать план с фактом.",
+    audience: "Предпринимателям и финансовым специалистам, которые планируют бюджет или оценивают сценарии.",
+  },
+  "Контроль обязательств": {
+    tasks: "Учитывать задолженности, планировать платежи и контролировать сроки исполнения обязательств.",
+    audience: "Владельцам бизнеса и сотрудникам, отвечающим за платежи и взаиморасчёты.",
+  },
+  "Анализ эффективности бизнеса": {
+    tasks: "Оценивать прибыльность проектов, продуктов и ключевые показатели эффективности.",
+    audience: "Предпринимателям и руководителям, которым важно понимать рентабельность бизнеса.",
+  },
+};
+
 function actionDetails(template: FinancialTemplate) {
   if (template.action === "download") {
     return `Файл ${template.format}. Ссылка на скачивание появится здесь после подключения файлового каталога.`;
@@ -182,8 +215,21 @@ export default function TemplatesContent() {
   const [category, setCategory] = useState("");
   const [favorites, setFavorites] = useState<string[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<FinancialTemplate | null>(null);
+  const [actionNotice, setActionNotice] = useState<FinancialTemplate | null>(null);
 
-  const filteredTemplates = templates.filter((template) => {
+  useEffect(() => {
+    if (!activeTemplate && !actionNotice) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActiveTemplate(null);
+        setActionNotice(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTemplate, actionNotice]);
+
+  const filteredTemplates = templatesWithSources.filter((template) => {
     const matchesCategory = !category || template.category === category;
     const searchText = `${template.title} ${template.description} ${template.category}`.toLocaleLowerCase("ru-RU");
     return matchesCategory && searchText.includes(query.trim().toLocaleLowerCase("ru-RU"));
@@ -193,6 +239,11 @@ export default function TemplatesContent() {
     setFavorites((current) => current.includes(id)
       ? current.filter((favorite) => favorite !== id)
       : [...current, id]);
+  };
+
+  const closeTemplateDetails = () => {
+    setActiveTemplate(null);
+    setActionNotice(null);
   };
 
   return (
@@ -237,7 +288,21 @@ export default function TemplatesContent() {
           {filteredTemplates.map((template) => {
             const isFavorite = favorites.includes(template.id);
             return (
-              <article className="template-card" key={template.id}>
+              <article
+                className="template-card"
+                key={template.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`Подробнее о шаблоне «${template.title}»`}
+                onClick={() => setActiveTemplate(template)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setActiveTemplate(template);
+                  }
+                }}
+              >
                 <div className="template-card__top">
                   <span className="template-card__file-icon" aria-hidden="true">
                     {template.format === "PDF" ? <FileText /> : <FileSpreadsheet />}
@@ -247,7 +312,10 @@ export default function TemplatesContent() {
                     className={`template-card__favorite${isFavorite ? " is-active" : ""}`}
                     aria-label={isFavorite ? "Убрать из избранного" : "Добавить в избранное"}
                     aria-pressed={isFavorite}
-                    onClick={() => toggleFavorite(template.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFavorite(template.id);
+                    }}
                   >
                     <Heart aria-hidden="true" />
                   </button>
@@ -261,7 +329,14 @@ export default function TemplatesContent() {
                 </div>
                 <div className="template-card__footer">
                   <span className="template-card__free">Бесплатно</span>
-                  <button type="button" className="template-card__action" onClick={() => setActiveTemplate(template)}>
+                  <button
+                    type="button"
+                    className="template-card__action"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setActionNotice(template);
+                    }}
+                  >
                     {template.action === "download" && <ArrowDownToLine aria-hidden="true" />}
                     {template.action === "open" && <ExternalLink aria-hidden="true" />}
                     {template.action === "source" && <ExternalLink aria-hidden="true" />}
@@ -282,31 +357,98 @@ export default function TemplatesContent() {
       )}
 
       {activeTemplate && (
-        <div className="templates-modal" role="presentation" onClick={() => setActiveTemplate(null)}>
+        <div className="templates-modal" role="presentation" onClick={closeTemplateDetails}>
           <div
             className="templates-modal__card"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="template-action-title"
+            aria-labelledby="template-detail-title"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="templates-modal__heading">
               <span className="template-card__file-icon" aria-hidden="true">
                 {activeTemplate.format === "PDF" ? <FileText /> : <FileSpreadsheet />}
               </span>
-              <button type="button" className="template-card__favorite" aria-label="Закрыть" onClick={() => setActiveTemplate(null)}>
+              <button type="button" className="template-card__favorite" aria-label="Закрыть" onClick={closeTemplateDetails}>
                 <X aria-hidden="true" />
               </button>
             </div>
             <span className="template-card__category">{activeTemplate.category}</span>
-            <h2 id="template-action-title">{activeTemplate.title}</h2>
-            <p>{activeTemplate.description}</p>
-            <div className="templates-modal__details">
-              <span>Формат <strong>{activeTemplate.format}</strong></span>
-              <span>Источник <strong>{activeTemplate.source}</strong></span>
+            <div className="templates-modal__title">
+              <h2 id="template-detail-title">{activeTemplate.title}</h2>
+              <span className="template-card__free">Бесплатно</span>
             </div>
-            <p className="templates-modal__note">{actionDetails(activeTemplate)}</p>
-            <button type="button" className="template-card__action" onClick={() => setActiveTemplate(null)}>Понятно</button>
+            <p className="templates-modal__description">{activeTemplate.description}</p>
+            <div className="templates-modal__details">
+              <span>Формат файла <strong>{activeTemplate.format}</strong></span>
+              <span>Добавлено <strong>26 ноября 2026</strong></span>
+            </div>
+            <div className="templates-modal__section">
+              <h3>Для каких задач предназначен</h3>
+              <p>{categoryDetails[activeTemplate.category].tasks}</p>
+            </div>
+            <div className="templates-modal__section">
+              <h3>Для кого подходит</h3>
+              <p>{categoryDetails[activeTemplate.category].audience}</p>
+            </div>
+            <div className="templates-modal__source">
+              <span>Источник</span>
+              {activeTemplate.sourceUrl ? (
+                <a href={activeTemplate.sourceUrl} target="_blank" rel="noreferrer">
+                  {activeTemplate.source}<ExternalLink aria-hidden="true" />
+                </a>
+              ) : (
+                <span className="templates-modal__source-status">
+                  <strong>{activeTemplate.source}</strong>
+                  <small>Ссылка на оригинальный материал пока не добавлена</small>
+                </span>
+              )}
+            </div>
+            {activeTemplate.format === "Google Sheets" && (
+              <div className="templates-modal__section">
+                <h3>Как использовать</h3>
+                <p>Откройте онлайн-шаблон и создайте свою копию, чтобы вносить данные и сохранять изменения.</p>
+              </div>
+            )}
+            {activeTemplate.format === "XLSX" && (
+              <div className="templates-modal__section">
+                <h3>Как использовать</h3>
+                <p>Скачайте файл и откройте его в Excel или совместимом табличном редакторе.</p>
+              </div>
+            )}
+            {actionNotice?.id === activeTemplate.id && (
+              <p className="templates-modal__note" role="status">{actionDetails(activeTemplate)}</p>
+            )}
+            <div className="templates-modal__footer">
+              <button
+                type="button"
+                className={`template-card__favorite${favorites.includes(activeTemplate.id) ? " is-active" : ""}`}
+                aria-label={favorites.includes(activeTemplate.id) ? "Убрать из избранного" : "Добавить в избранное"}
+                aria-pressed={favorites.includes(activeTemplate.id)}
+                onClick={() => toggleFavorite(activeTemplate.id)}
+              >
+                <Heart aria-hidden="true" />
+                <span>{favorites.includes(activeTemplate.id) ? "В избранном" : "В избранное"}</span>
+              </button>
+              <button type="button" className="template-card__action" onClick={() => setActionNotice(activeTemplate)}>
+                {activeTemplate.action === "download" && <ArrowDownToLine aria-hidden="true" />}
+                {activeTemplate.action !== "download" && <ExternalLink aria-hidden="true" />}
+                {actionLabels[activeTemplate.action]}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {actionNotice && !activeTemplate && (
+        <div className="templates-modal" role="presentation" onClick={() => setActionNotice(null)}>
+          <div className="templates-action-notice" role="dialog" aria-modal="true" aria-labelledby="template-action-title" onClick={(event) => event.stopPropagation()}>
+            <div className="templates-modal__heading">
+              <h2 id="template-action-title">{actionLabels[actionNotice.action]}</h2>
+              <button type="button" className="template-card__favorite" aria-label="Закрыть" onClick={() => setActionNotice(null)}>
+                <X aria-hidden="true" />
+              </button>
+            </div>
+            <p>{actionDetails(actionNotice)}</p>
           </div>
         </div>
       )}
