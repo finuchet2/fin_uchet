@@ -17,6 +17,7 @@ import { createPortal } from "react-dom";
 import FinancialDashboard from "./FinancialDashboard";
 import BankStatementUpload from "./BankStatementUpload";
 import CustomSelect from "./CustomSelect";
+import TemplatesContent from "./TemplatesContent";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
 import { usePersistentState } from "./hooks/usePersistentState";
@@ -675,7 +676,7 @@ function NewPassword({ navigate }: { navigate: (screen: Screen) => void }) {
   );
 }
 
-type CabinetSection = "dashboard" | "operations" | "projects" | "settings" | "statement";
+type CabinetSection = "dashboard" | "operations" | "projects" | "templates" | "settings" | "statement";
 type CabinetIconName =
   | CabinetSection
   | "plus"
@@ -716,6 +717,12 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
       <>
         <path d="M4 7.5h6l2 2h8v9.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7.5Z" />
         <path d="M4 8V6a2 2 0 0 1 2-2h4l2 2h5" />
+      </>
+    ),
+    templates: (
+      <>
+        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 1 4 17.5v-12Z" />
+        <path d="M4 17.5A2.5 2.5 0 0 1 6.5 15H20M8 7h8M8 10.5h6" />
       </>
     ),
     settings: (
@@ -806,6 +813,7 @@ const cabinetNavigation: { id: CabinetSection; label: string; mobileLabel?: stri
   { id: "operations", label: "Операции" },
   { id: "statement", label: "Импорт выписки", mobileLabel: "Импорт" },
   { id: "projects", label: "Проекты" },
+  { id: "templates", label: "Шаблоны" },
   { id: "settings", label: "Настройки" },
 ];
 
@@ -863,11 +871,12 @@ function getCalendarDays(month: Date) {
 
 type DropdownOption = { value: string; label: string };
 
-function CustomDropdown({ value, options, onChange, ariaLabel }: {
+function CustomDropdown({ value, options, onChange, ariaLabel, portalLayer = "page" }: {
   value: string;
   options: DropdownOption[];
   onChange: (value: string) => void;
   ariaLabel: string;
+  portalLayer?: "page" | "drawer";
 }) {
   const [open, setOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ left: 8, top: 8, width: 240, maxHeight: 260 });
@@ -937,7 +946,7 @@ function CustomDropdown({ value, options, onChange, ariaLabel }: {
   const portalMenu = open ? (
     <div
       ref={menuRef}
-      className="custom-dropdown__menu custom-dropdown__menu--portal"
+      className={`custom-dropdown__menu custom-dropdown__menu--portal${portalLayer === "drawer" ? " custom-dropdown__menu--portal-drawer" : ""}`}
       role="listbox"
       aria-label={ariaLabel}
       style={menuPosition}
@@ -1599,6 +1608,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
                   value={project}
                   onChange={setProject}
                   ariaLabel="Проект операции"
+                  portalLayer="drawer"
                   options={activeProjects.length
                     ? activeProjects.map((item) => ({ value: item.name, label: item.name }))
                     : [{ value: "", label: "Нет проектов" }]}
@@ -1622,6 +1632,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
                   setFieldErrors((current) => ({ ...current, category: "" }));
                 }}
                 ariaLabel="Категория операции"
+                portalLayer="drawer"
                 options={typeCategories.map((item) => ({ value: item, label: item }))}
               />
             </div>
@@ -2144,6 +2155,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
     operations: ["Операции", "Контролируйте каждое движение денег"],
     statement: ["Импорт выписки", "Загрузите выписку для проверки операций"],
     projects: ["Проекты", "Финансы бизнеса по направлениям"],
+    templates: ["Бесплатные финансовые шаблоны", "Готовые инструменты для учёта, планирования и анализа финансов вашего бизнеса"],
     settings: ["Настройки", "Справочники и параметры учёта"],
   };
 
@@ -2210,7 +2222,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
       </aside>
 
       <main className="cabinet-main">
-        {!(section === "statement" && reviewFileName !== null) && <header className="cabinet-header">
+        {!(section === "statement" && reviewFileName !== null) && <header className={`cabinet-header${section === "templates" ? " cabinet-header--templates" : ""}`}>
           <div><p>{sectionTitles[section][1]}</p><h1>{sectionTitles[section][0]}</h1></div>
           <div className="cabinet-header__actions">
             <div className="header-popover-anchor" ref={notificationsPopoverRef}>
@@ -2231,7 +2243,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
                 </div>
               )}
             </div>
-            {section !== "statement" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
+            {section !== "statement" && section !== "templates" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
           </div>
         </header>}
         <div className="cabinet-content">
@@ -2244,6 +2256,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             setOperations((current) => current.map((operation) => operation.project === previousName ? { ...operation, project: nextName } : operation));
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
+          {section === "templates" && <TemplatesContent />}
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
           {section === "statement" && (
             <BankStatementUpload
@@ -2355,7 +2368,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
           </button>
         ))}
       </nav>
-      {section !== "statement" && (
+      {section !== "statement" && section !== "templates" && (
         <button className="mobile-add" aria-label="Добавить операцию" onClick={openNewOperation}><CabinetIcon name="plus" /></button>
       )}
     </div>
