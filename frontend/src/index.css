@@ -740,6 +740,15 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(47, 112, 183
 .drawer__body { flex: 1; overflow-x: hidden; overflow-y: auto; padding: 22px 24px; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 20px; }
 .drawer__footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid #edf2f7; background: #fbfdff; }
 .drawer__footer .directory-btn { min-height: 44px; padding: 0 20px; font-size: 13px; }
+.operation-template-promo { display: grid; gap: 9px; padding: 16px; border: 1px solid #d8e8f6; border-radius: 14px; background: #f3f8fd; }
+.operation-template-promo h3 { margin: 0; color: #234f7c; font-size: 14px; line-height: 1.4; letter-spacing: -.01em; }
+.operation-template-promo p { margin: 0; color: #60778d; font-size: 12px; line-height: 1.55; }
+.operation-template-promo button { justify-self: start; padding: 2px 0; border: 0; color: #245c9c; background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
+.operation-template-promo button:hover { color: #163f70; text-decoration: underline; }
+.operation-template-promo button:focus-visible { outline: 2px solid #74a5d6; outline-offset: 3px; border-radius: 3px; }
+.operation-template-warning__message { margin: 0 0 18px; color: #61758a; font-size: 13px; line-height: 1.5; }
+.operation-template-warning__actions { display: grid; justify-items: stretch; gap: 8px; }
+.operation-template-warning__actions .directory-btn { justify-content: center; min-height: 42px; }
 .operation-type-segmented { display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; padding: 4px; border: 1px solid #dbe6f2; border-radius: 13px; background: #f2f7fc; }
 .operation-type-segmented button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 9px; color: #61758a; background: transparent; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; transition: .16s ease; }
 .operation-type-segmented button.is-active { color: #245C9C; background: #fff; box-shadow: 0 3px 10px rgba(47,112,183,.12); font-weight: 650; }
