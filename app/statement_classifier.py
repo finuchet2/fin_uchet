@@ -110,7 +110,20 @@ def _parse_int_id(value: Any) -> int | None:
     return None
 
 
+def ensure_default_categories(db: Session) -> None:
+    if db.query(Category).count() >= 15:
+        return
+    for n in ['Аренда', 'Коммуналка', 'Интернет', 'Аренда помещения', 'Коммунальные услуги', 'Интернет и связь', 'Заработная плата', 'Хозяйственные товары', 'Расходные материалы', 'Ремонт и обслуживание', 'Прочие расходы', 'Закупка товаров', 'Комиссия маркетплейса', 'Логистика и доставка', 'Хранение товаров', 'Упаковка и расходные материалы', 'Реклама и продвижение', 'Возвраты и потери', 'Упаковка', 'Реклама', 'Банковские комиссии', 'Налоги', 'Подписки и сервисы', 'УСН 6%', 'УСН 15%', 'Страховые взносы', 'НДФЛ', 'Транспортный налог', 'Налоговые платежи', 'Прочие налоговые платежи']:
+        if not db.query(Category).filter(Category.name == n).first():
+            db.add(Category(user_id=None, name=n, type=CategoryType.EXPENSE, is_system=True, is_active=True))
+    for n in ['Продажи', 'Авансы', 'Прочие поступления', 'Вознаграждение от маркетплейса', 'Дополнительные услуги', 'Прочие доходы', 'Продажа товаров', 'Возвраты и корректировки', 'Выручка']:
+        if not db.query(Category).filter(Category.name == n).first():
+            db.add(Category(user_id=None, name=n, type=CategoryType.INCOME, is_system=True, is_active=True))
+    db.flush()
+
+
 def get_user_context(db: Session, user_id: int | None = None) -> dict[str, list[dict[str, Any]]]:
+    ensure_default_categories(db)
     projects_query = db.query(BusinessProject).filter(BusinessProject.is_active.is_(True))
     if user_id is not None:
         projects_query = projects_query.filter(BusinessProject.user_id == user_id)
