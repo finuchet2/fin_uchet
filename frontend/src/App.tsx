@@ -17,6 +17,7 @@ import { createPortal } from "react-dom";
 import FinancialDashboard from "./FinancialDashboard";
 import BankStatementUpload from "./BankStatementUpload";
 import CustomSelect from "./CustomSelect";
+import TemplatesContent from "./TemplatesContent";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
 import { usePersistentState } from "./hooks/usePersistentState";
@@ -675,7 +676,7 @@ function NewPassword({ navigate }: { navigate: (screen: Screen) => void }) {
   );
 }
 
-type CabinetSection = "dashboard" | "operations" | "projects" | "settings" | "statement";
+type CabinetSection = "dashboard" | "operations" | "projects" | "templates" | "settings" | "statement";
 type CabinetIconName =
   | CabinetSection
   | "plus"
@@ -716,6 +717,12 @@ function CabinetIcon({ name }: { name: CabinetIconName }) {
       <>
         <path d="M4 7.5h6l2 2h8v9.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7.5Z" />
         <path d="M4 8V6a2 2 0 0 1 2-2h4l2 2h5" />
+      </>
+    ),
+    templates: (
+      <>
+        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17H6.5A2.5 2.5 0 0 1 4 17.5v-12Z" />
+        <path d="M4 17.5A2.5 2.5 0 0 1 6.5 15H20M8 7h8M8 10.5h6" />
       </>
     ),
     settings: (
@@ -806,6 +813,7 @@ const cabinetNavigation: { id: CabinetSection; label: string; mobileLabel?: stri
   { id: "operations", label: "Операции" },
   { id: "statement", label: "Импорт выписки", mobileLabel: "Импорт" },
   { id: "projects", label: "Проекты" },
+  { id: "templates", label: "Шаблоны" },
   { id: "settings", label: "Настройки" },
 ];
 
@@ -863,11 +871,12 @@ function getCalendarDays(month: Date) {
 
 type DropdownOption = { value: string; label: string };
 
-function CustomDropdown({ value, options, onChange, ariaLabel }: {
+function CustomDropdown({ value, options, onChange, ariaLabel, portalLayer = "page" }: {
   value: string;
   options: DropdownOption[];
   onChange: (value: string) => void;
   ariaLabel: string;
+  portalLayer?: "page" | "drawer";
 }) {
   const [open, setOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ left: 8, top: 8, width: 240, maxHeight: 260 });
@@ -937,7 +946,7 @@ function CustomDropdown({ value, options, onChange, ariaLabel }: {
   const portalMenu = open ? (
     <div
       ref={menuRef}
-      className="custom-dropdown__menu custom-dropdown__menu--portal"
+      className={`custom-dropdown__menu custom-dropdown__menu--portal${portalLayer === "drawer" ? " custom-dropdown__menu--portal-drawer" : ""}`}
       role="listbox"
       aria-label={ariaLabel}
       style={menuPosition}
@@ -1438,24 +1447,39 @@ function OperationsContent({ operations, projects, onAdd, onDelete, onEdit, peri
 
 type OperationDrawerType = "expense" | "income" | "tax";
 
-function OperationDrawer({ operation, projects, categories, onClose, onSaved, onCreateProject }: {
+type OperationDraft = {
+  type: OperationDrawerType;
+  amount: string;
+  factDate: string;
+  periodDate: string;
+  periodDateManuallyEdited: boolean;
+  project: string;
+  category: string;
+  comment: string;
+};
+
+function OperationDrawer({ operation, projects, categories, draft, onClose, onSaved, onCreateProject, onNavigateToTemplates }: {
   operation: Operation | null;
   projects: DirectoryProject[];
   categories: Record<OperationType, string[]>;
+  draft: OperationDraft | null;
   onClose: () => void;
   onSaved: (op: Operation) => void;
   onCreateProject: (name: string, description: string) => DirectoryProject;
+  onNavigateToTemplates: (draft: OperationDraft | null) => void;
 }) {
   const activeProjects = projects.filter((p) => !p.archived);
-  const [type, setType] = useState<OperationDrawerType>(operation?.type ?? "expense");
-  const [amount, setAmount] = useState(operation ? Math.abs(operation.amount).toFixed(2).replace(".", ",") : "");
-  const initialFactDate = operation?.date ?? formatDateValue(new Date());
+  const [type, setType] = useState<OperationDrawerType>(draft?.type ?? operation?.type ?? "expense");
+  const [amount, setAmount] = useState(draft?.amount ?? (operation ? Math.abs(operation.amount).toFixed(2).replace(".", ",") : ""));
+  const initialFactDate = draft?.factDate ?? operation?.date ?? formatDateValue(new Date());
   const [factDate, setFactDate] = useState(initialFactDate);
-  const [periodDate, setPeriodDate] = useState(operation?.periodDate ?? initialFactDate);
-  const [periodDateManuallyEdited, setPeriodDateManuallyEdited] = useState(Boolean(operation?.periodDate));
-  const [project, setProject] = useState(operation?.project ?? activeProjects[0]?.name ?? "");
-  const [category, setCategory] = useState(operation?.category ?? categories.expense[0] ?? "");
-  const [comment, setComment] = useState(operation?.comment ?? "");
+  const [periodDate, setPeriodDate] = useState(draft?.periodDate ?? operation?.periodDate ?? initialFactDate);
+  const [periodDateManuallyEdited, setPeriodDateManuallyEdited] = useState(draft?.periodDateManuallyEdited ?? Boolean(operation?.periodDate));
+  const [project, setProject] = useState(draft?.project ?? operation?.project ?? activeProjects[0]?.name ?? "");
+  const [category, setCategory] = useState(draft?.category ?? operation?.category ?? categories[draft?.type ?? operation?.type ?? "expense"][0] ?? "");
+  const [comment, setComment] = useState(draft?.comment ?? operation?.comment ?? "");
+  const [hasUserInput, setHasUserInput] = useState(Boolean(draft));
+  const [templateWarningOpen, setTemplateWarningOpen] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({ amount: "", category: "", factDate: "", periodDate: "" });
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -1463,15 +1487,40 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
   const [newProjectDescription, setNewProjectDescription] = useState("");
   const [newProjectError, setNewProjectError] = useState("");
 
-  const typeCategories = operation?.type === type && !categories[type].includes(operation.category)
-    ? [operation.category, ...categories[type]]
+  const retainedCategory = operation?.type === type
+    ? operation.category
+    : draft?.type === type
+      ? draft.category
+      : null;
+  const typeCategories = retainedCategory && !categories[type].includes(retainedCategory)
+    ? [retainedCategory, ...categories[type]]
     : categories[type];
   const commentLimit = 255;
 
   const switchType = (next: OperationDrawerType) => {
+    if (next !== type) setHasUserInput(true);
     setType(next);
     setCategory(categories[next][0] ?? "");
     setFieldErrors((current) => ({ ...current, category: "" }));
+  };
+
+  const getDraft = (): OperationDraft => ({
+    type,
+    amount,
+    factDate,
+    periodDate,
+    periodDateManuallyEdited,
+    project,
+    category,
+    comment,
+  });
+
+  const openTemplates = () => {
+    if (hasUserInput) {
+      setTemplateWarningOpen(true);
+      return;
+    }
+    onNavigateToTemplates(null);
   };
 
   const formatAmountInput = (raw: string) => {
@@ -1562,6 +1611,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
                   setFieldErrors((current) => ({ ...current, amount: "Введите сумму не более 12 цифр до запятой и 2 после" }));
                   return;
                 }
+                setHasUserInput(true);
                 setAmount(nextAmount);
                 setFieldErrors((current) => ({ ...current, amount: "" }));
                 setError("");
@@ -1573,6 +1623,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
 
           <div className="drawer-dates">
             <DateField label="Дата факта" value={factDate} onChange={(value) => {
+              setHasUserInput(true);
               setFactDate(value);
               if (!periodDateManuallyEdited) {
                 setPeriodDate(value);
@@ -1583,6 +1634,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
               setError("");
             }} onInvalid={() => setFieldErrors((current) => ({ ...current, factDate: "Введите реальную дату в формате ДД.ММ.ГГГГ" }))} error={fieldErrors.factDate} hint="Реальное движение денег (для Cash Flow)" />
             <DateField label="Дата периода" value={periodDate} onChange={(value) => {
+              setHasUserInput(true);
               setPeriodDate(value);
               setPeriodDateManuallyEdited(true);
               setFieldErrors((current) => ({ ...current, periodDate: "" }));
@@ -1597,8 +1649,9 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
                 <CabinetIcon name="projects" />
                 <CustomDropdown
                   value={project}
-                  onChange={setProject}
+                  onChange={(value) => { setHasUserInput(true); setProject(value); }}
                   ariaLabel="Проект операции"
+                  portalLayer="drawer"
                   options={activeProjects.length
                     ? activeProjects.map((item) => ({ value: item.name, label: item.name }))
                     : [{ value: "", label: "Нет проектов" }]}
@@ -1618,10 +1671,12 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
               <CustomDropdown
                 value={category}
                 onChange={(value) => {
+                  setHasUserInput(true);
                   setCategory(value);
                   setFieldErrors((current) => ({ ...current, category: "" }));
                 }}
                 ariaLabel="Категория операции"
+                portalLayer="drawer"
                 options={typeCategories.map((item) => ({ value: item, label: item }))}
               />
             </div>
@@ -1630,11 +1685,19 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
 
           <div className="drawer-field">
             <label className="drawer-field__label">Комментарий</label>
-            <textarea className="drawer-textarea" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={commentLimit} placeholder="Добавьте комментарий…" rows={3} />
+            <textarea className="drawer-textarea" value={comment} onChange={(e) => { setHasUserInput(true); setComment(e.target.value); }} maxLength={commentLimit} placeholder="Добавьте комментарий…" rows={3} />
             <p className="drawer-field__counter">{comment.length} / {commentLimit}</p>
           </div>
 
           {error && <p className="directory-error">{error}</p>}
+
+          {!operation && (type === "income" || type === "expense") && (
+            <aside className="operation-template-promo" aria-labelledby="operation-template-promo-title">
+              <h3 id="operation-template-promo-title">Хотите лучше контролировать финансы бизнеса?</h3>
+              <p>Воспользуйтесь нашими бесплатными финансовыми шаблонами для учёта доходов и расходов, планирования бюджета и анализа прибыли.</p>
+              <button type="button" onClick={openTemplates}>Посмотреть шаблоны</button>
+            </aside>
+          )}
         </div>
 
         <div className="drawer__footer">
@@ -1643,6 +1706,25 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
             <CabinetIcon name="check" /><span>Сохранить</span>
           </button>
         </div>
+
+        {templateWarningOpen && (
+          <div className="directory-modal" role="dialog" aria-modal="true" aria-labelledby="operation-template-warning-title" onClick={() => setTemplateWarningOpen(false)}>
+            <div className="directory-modal__card" onClick={(event) => event.stopPropagation()}>
+              <div className="directory-modal__head">
+                <h3 id="operation-template-warning-title">Операция ещё не завершена</h3>
+                <button type="button" className="icon-button" aria-label="Закрыть" onClick={() => setTemplateWarningOpen(false)}>
+                  <CabinetIcon name="x" />
+                </button>
+              </div>
+              <p className="operation-template-warning__message">Вы уже начали заполнять операцию. Как поступить с введёнными данными?</p>
+              <div className="operation-template-warning__actions">
+                <button type="button" className="directory-btn directory-btn--ghost" onClick={() => setTemplateWarningOpen(false)}>Остаться в форме</button>
+                <button type="button" className="directory-btn directory-btn--ghost" onClick={() => onNavigateToTemplates(null)}>Перейти без сохранения</button>
+                <button type="button" className="directory-btn directory-btn--primary" onClick={() => onNavigateToTemplates(getDraft())}>Сохранить черновик и перейти</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {projectModalOpen && (
           <div className="directory-modal directory-modal--inline" role="dialog" aria-modal="true" aria-label="Создать проект">
@@ -2086,6 +2168,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const [reviewFileName, setReviewFileName] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingOperation, setEditingOperation] = useState<Operation | null>(null);
+  const [operationDraft, setOperationDraft] = useState<OperationDraft | null>(null);
   const [opNotice, setOpNotice] = useState("");
   const [pendingDeletion, setPendingDeletion] = useState<Operation | null>(null);
   const [deletingOperation, setDeletingOperation] = useState(false);
@@ -2144,6 +2227,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
     operations: ["Операции", "Контролируйте каждое движение денег"],
     statement: ["Импорт выписки", "Загрузите выписку для проверки операций"],
     projects: ["Проекты", "Финансы бизнеса по направлениям"],
+    templates: ["Бесплатные финансовые шаблоны", "Готовые инструменты для учёта, планирования и анализа финансов вашего бизнеса"],
     settings: ["Настройки", "Справочники и параметры учёта"],
   };
 
@@ -2210,7 +2294,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
       </aside>
 
       <main className="cabinet-main">
-        {!(section === "statement" && reviewFileName !== null) && <header className="cabinet-header">
+        {!(section === "statement" && reviewFileName !== null) && <header className={`cabinet-header${section === "templates" ? " cabinet-header--templates" : ""}`}>
           <div><p>{sectionTitles[section][1]}</p><h1>{sectionTitles[section][0]}</h1></div>
           <div className="cabinet-header__actions">
             <div className="header-popover-anchor" ref={notificationsPopoverRef}>
@@ -2231,7 +2315,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
                 </div>
               )}
             </div>
-            {section !== "statement" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
+            {section !== "statement" && section !== "templates" && <button className="cabinet-primary" onClick={openNewOperation}><CabinetIcon name="plus" /><span>Добавить операцию</span></button>}
           </div>
         </header>}
         <div className="cabinet-content">
@@ -2244,6 +2328,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             setOperations((current) => current.map((operation) => operation.project === previousName ? { ...operation, project: nextName } : operation));
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
+          {section === "templates" && <TemplatesContent />}
           {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
           {section === "statement" && (
             <BankStatementUpload
@@ -2306,8 +2391,15 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             operation={editingOperation}
             projects={projects}
             categories={activeCategoryNames}
+            draft={editingOperation ? null : operationDraft}
             onClose={() => setDrawerOpen(false)}
+            onNavigateToTemplates={(draft) => {
+              setOperationDraft(draft);
+              setDrawerOpen(false);
+              navigateSection("templates");
+            }}
             onSaved={(op) => {
+              setOperationDraft(null);
               if (editingOperation) {
                 setOperations((current) => current.map((operation) => operation.id === op.id ? op : operation));
                 setProjects((current) => current.map((project) => {
@@ -2355,7 +2447,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
           </button>
         ))}
       </nav>
-      {section !== "statement" && (
+      {section !== "statement" && section !== "templates" && (
         <button className="mobile-add" aria-label="Добавить операцию" onClick={openNewOperation}><CabinetIcon name="plus" /></button>
       )}
     </div>
