@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowDownToLine, ExternalLink, FileSpreadsheet, FileText, Heart, Search, X } from "lucide-react";
+import { AlertCircle, ArrowDownToLine, ExternalLink, FileSpreadsheet, FileText, Heart, Search, X } from "lucide-react";
 import CustomSelect from "./CustomSelect";
 
 const categories = [
@@ -22,6 +22,7 @@ type FinancialTemplate = {
   source: string;
   sourceUrl?: string;
   action: TemplateAction;
+  available: boolean;
 };
 
 const templates: FinancialTemplate[] = [
@@ -33,6 +34,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Bifintra",
     action: "download",
+    available: true,
   },
   {
     id: "cash-flow",
@@ -42,6 +44,7 @@ const templates: FinancialTemplate[] = [
     format: "Google Sheets",
     source: "Adesk",
     action: "open",
+    available: true,
   },
   {
     id: "profit-loss",
@@ -51,6 +54,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Controlum",
     action: "download",
+    available: true,
   },
   {
     id: "budget-income-expense",
@@ -60,6 +64,7 @@ const templates: FinancialTemplate[] = [
     format: "Google Sheets",
     source: "Bifintra",
     action: "open",
+    available: true,
   },
   {
     id: "budget-cash-flow",
@@ -69,6 +74,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Adesk",
     action: "download",
+    available: true,
   },
   {
     id: "payment-calendar",
@@ -78,6 +84,7 @@ const templates: FinancialTemplate[] = [
     format: "Google Sheets",
     source: "Bifintra",
     action: "open",
+    available: false,
   },
   {
     id: "receivables-payables",
@@ -87,6 +94,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Controlum",
     action: "download",
+    available: true,
   },
   {
     id: "project-profitability",
@@ -96,6 +104,7 @@ const templates: FinancialTemplate[] = [
     format: "Google Sheets",
     source: "Bifintra",
     action: "open",
+    available: true,
   },
   {
     id: "financial-model",
@@ -105,6 +114,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Adesk",
     action: "download",
+    available: true,
   },
   {
     id: "pnl",
@@ -114,6 +124,7 @@ const templates: FinancialTemplate[] = [
     format: "PDF",
     source: "Controlum",
     action: "source",
+    available: true,
   },
   {
     id: "cash-flow-forecast",
@@ -123,6 +134,7 @@ const templates: FinancialTemplate[] = [
     format: "Google Sheets",
     source: "Adesk",
     action: "open",
+    available: true,
   },
   {
     id: "expense-tracker",
@@ -132,6 +144,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Bifintra",
     action: "download",
+    available: true,
   },
   {
     id: "payment-obligations",
@@ -141,6 +154,7 @@ const templates: FinancialTemplate[] = [
     format: "PDF",
     source: "Controlum",
     action: "source",
+    available: true,
   },
   {
     id: "break-even",
@@ -150,6 +164,7 @@ const templates: FinancialTemplate[] = [
     format: "XLSX",
     source: "Bifintra",
     action: "download",
+    available: true,
   },
   {
     id: "unit-economics",
@@ -159,6 +174,7 @@ const templates: FinancialTemplate[] = [
     format: "Google Sheets",
     source: "Adesk",
     action: "open",
+    available: true,
   },
 ];
 
@@ -200,34 +216,35 @@ const categoryDetails: Record<TemplateCategory, { tasks: string; audience: strin
   },
 };
 
-function actionDetails(template: FinancialTemplate) {
-  if (template.action === "download") {
-    return `Файл ${template.format}. Ссылка на скачивание появится здесь после подключения файлового каталога.`;
-  }
-  if (template.action === "open") {
-    return `Онлайн-шаблон ${template.format}. Ссылка для открытия появится здесь после подключения каталога материалов.`;
-  }
-  return `Источник: ${template.source}. Ссылка на страницу материала появится здесь после подключения каталога.`;
-}
-
 export default function TemplatesContent() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [favorites, setFavorites] = useState<string[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<FinancialTemplate | null>(null);
-  const [actionNotice, setActionNotice] = useState<FinancialTemplate | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
-    if (!activeTemplate && !actionNotice) return;
+    const timer = window.setTimeout(() => setIsLoading(false), 350);
+    return () => window.clearTimeout(timer);
+  }, [category, query]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!activeTemplate) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setActiveTemplate(null);
-        setActionNotice(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTemplate, actionNotice]);
+  }, [activeTemplate]);
 
   const filteredTemplates = templatesWithSources.filter((template) => {
     const matchesCategory = !category || template.category === category;
@@ -243,7 +260,12 @@ export default function TemplatesContent() {
 
   const closeTemplateDetails = () => {
     setActiveTemplate(null);
-    setActionNotice(null);
+  };
+
+  const showActionError = (template: FinancialTemplate) => {
+    setToast(template.action === "download"
+      ? "Не удалось загрузить файл. Попробуйте скачать его позже."
+      : "Не удалось открыть материал. Проверьте подключение и попробуйте ещё раз.");
   };
 
   return (
@@ -254,12 +276,15 @@ export default function TemplatesContent() {
           <input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setIsLoading(true);
+              setQuery(event.target.value);
+            }}
             placeholder="Поиск по названию и назначению"
             aria-label="Поиск по названию и назначению шаблона"
           />
           {query && (
-            <button type="button" aria-label="Очистить поиск" onClick={() => setQuery("")}>
+            <button type="button" aria-label="Очистить поиск" onClick={() => { setIsLoading(true); setQuery(""); }}>
               <X aria-hidden="true" />
             </button>
           )}
@@ -271,7 +296,10 @@ export default function TemplatesContent() {
               { value: "", label: "Все категории" },
               ...categories.map((item) => ({ value: item, label: item })),
             ]}
-            onChange={setCategory}
+            onChange={(value) => {
+              setIsLoading(true);
+              setCategory(value);
+            }}
             ariaLabel="Фильтр по категориям шаблонов"
             menuPortal
           />
@@ -279,11 +307,24 @@ export default function TemplatesContent() {
       </div>
 
       <div className="templates-results">
-        <p>{filteredTemplates.length} {filteredTemplates.length === 1 ? "шаблон" : filteredTemplates.length >= 2 && filteredTemplates.length <= 4 ? "шаблона" : "шаблонов"}</p>
+        <p>{isLoading ? "Загружаем шаблоны…" : `${filteredTemplates.length} ${filteredTemplates.length === 1 ? "шаблон" : filteredTemplates.length >= 2 && filteredTemplates.length <= 4 ? "шаблона" : "шаблонов"}`}</p>
         {favorites.length > 0 && <span>{favorites.length} в избранном</span>}
       </div>
 
-      {filteredTemplates.length > 0 ? (
+      {isLoading ? (
+        <div className="templates-grid templates-grid--loading" role="status" aria-label="Загружаем шаблоны">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div className="template-skeleton" key={index} aria-hidden="true">
+              <div className="template-skeleton__top"><span /><i /></div>
+              <span className="template-skeleton__category" />
+              <span className="template-skeleton__title" />
+              <span className="template-skeleton__description" />
+              <span className="template-skeleton__description template-skeleton__description--short" />
+              <div className="template-skeleton__footer"><span /><i /></div>
+            </div>
+          ))}
+        </div>
+      ) : filteredTemplates.length > 0 ? (
         <div className="templates-grid">
           {filteredTemplates.map((template) => {
             const isFavorite = favorites.includes(template.id);
@@ -328,31 +369,52 @@ export default function TemplatesContent() {
                   <span>Источник: {template.source}</span>
                 </div>
                 <div className="template-card__footer">
-                  <span className="template-card__free">Бесплатно</span>
+                  {template.available ? (
+                    <span className="template-card__free">Бесплатно</span>
+                  ) : (
+                    <span className="template-card__unavailable">Временно недоступен</span>
+                  )}
                   <button
                     type="button"
-                    className="template-card__action"
+                    className={`template-card__action${template.available ? "" : " is-disabled"}`}
+                    disabled={!template.available}
+                    title={template.available ? undefined : "Материал временно недоступен"}
                     onClick={(event) => {
                       event.stopPropagation();
-                      setActionNotice(template);
+                      showActionError(template);
                     }}
                   >
-                    {template.action === "download" && <ArrowDownToLine aria-hidden="true" />}
-                    {template.action === "open" && <ExternalLink aria-hidden="true" />}
-                    {template.action === "source" && <ExternalLink aria-hidden="true" />}
-                    {actionLabels[template.action]}
+                    {template.available && template.action === "download" && <ArrowDownToLine aria-hidden="true" />}
+                    {template.available && template.action !== "download" && <ExternalLink aria-hidden="true" />}
+                    {template.available ? actionLabels[template.action] : "Недоступен"}
                   </button>
                 </div>
+                {!template.available && (
+                  <p className="template-card__availability-note">Материал временно недоступен. Откройте карточку, чтобы узнать подробнее.</p>
+                )}
               </article>
             );
           })}
         </div>
+      ) : query.trim() ? (
+        <div className="templates-empty">
+          <span className="templates-empty__icon"><Search aria-hidden="true" /></span>
+          <h2>Ничего не найдено</h2>
+          <p>По вашему запросу ничего не найдено. Попробуйте изменить поисковый запрос</p>
+          <button type="button" onClick={() => { setIsLoading(true); setQuery(""); }}>Сбросить поиск</button>
+        </div>
+      ) : category ? (
+        <div className="templates-empty">
+          <span className="templates-empty__icon"><Search aria-hidden="true" /></span>
+          <h2>В этой категории пока нет шаблонов</h2>
+          <p>Выберите другую категорию или сбросьте фильтр, чтобы посмотреть все шаблоны.</p>
+          <button type="button" onClick={() => { setIsLoading(true); setCategory(""); }}>Сбросить фильтр</button>
+        </div>
       ) : (
         <div className="templates-empty">
           <span className="templates-empty__icon"><Search aria-hidden="true" /></span>
-          <h2>Шаблоны не найдены</h2>
-          <p>Измените поисковый запрос или выберите другую категорию.</p>
-          <button type="button" onClick={() => { setQuery(""); setCategory(""); }}>Сбросить фильтры</button>
+          <h2>Шаблоны скоро появятся</h2>
+          <p>Попробуйте заглянуть позже.</p>
         </div>
       )}
 
@@ -376,8 +438,17 @@ export default function TemplatesContent() {
             <span className="template-card__category">{activeTemplate.category}</span>
             <div className="templates-modal__title">
               <h2 id="template-detail-title">{activeTemplate.title}</h2>
-              <span className="template-card__free">Бесплатно</span>
+              {activeTemplate.available ? (
+                <span className="template-card__free">Бесплатно</span>
+              ) : (
+                <span className="template-card__unavailable">Временно недоступен</span>
+              )}
             </div>
+            {!activeTemplate.available && (
+              <p className="templates-unavailable-note" role="status">
+                Этот материал временно недоступен. Попробуйте вернуться к нему позже.
+              </p>
+            )}
             <p className="templates-modal__description">{activeTemplate.description}</p>
             <div className="templates-modal__details">
               <span>Формат файла <strong>{activeTemplate.format}</strong></span>
@@ -416,9 +487,6 @@ export default function TemplatesContent() {
                 <p>Скачайте файл и откройте его в Excel или совместимом табличном редакторе.</p>
               </div>
             )}
-            {actionNotice?.id === activeTemplate.id && (
-              <p className="templates-modal__note" role="status">{actionDetails(activeTemplate)}</p>
-            )}
             <div className="templates-modal__footer">
               <button
                 type="button"
@@ -430,26 +498,27 @@ export default function TemplatesContent() {
                 <Heart aria-hidden="true" />
                 <span>{favorites.includes(activeTemplate.id) ? "В избранном" : "В избранное"}</span>
               </button>
-              <button type="button" className="template-card__action" onClick={() => setActionNotice(activeTemplate)}>
-                {activeTemplate.action === "download" && <ArrowDownToLine aria-hidden="true" />}
-                {activeTemplate.action !== "download" && <ExternalLink aria-hidden="true" />}
-                {actionLabels[activeTemplate.action]}
+              <button
+                type="button"
+                className={`template-card__action${activeTemplate.available ? "" : " is-disabled"}`}
+                disabled={!activeTemplate.available}
+                onClick={() => showActionError(activeTemplate)}
+              >
+                {activeTemplate.available && activeTemplate.action === "download" && <ArrowDownToLine aria-hidden="true" />}
+                {activeTemplate.available && activeTemplate.action !== "download" && <ExternalLink aria-hidden="true" />}
+                {activeTemplate.available ? actionLabels[activeTemplate.action] : "Временно недоступен"}
               </button>
             </div>
           </div>
         </div>
       )}
-      {actionNotice && !activeTemplate && (
-        <div className="templates-modal" role="presentation" onClick={() => setActionNotice(null)}>
-          <div className="templates-action-notice" role="dialog" aria-modal="true" aria-labelledby="template-action-title" onClick={(event) => event.stopPropagation()}>
-            <div className="templates-modal__heading">
-              <h2 id="template-action-title">{actionLabels[actionNotice.action]}</h2>
-              <button type="button" className="template-card__favorite" aria-label="Закрыть" onClick={() => setActionNotice(null)}>
-                <X aria-hidden="true" />
-              </button>
-            </div>
-            <p>{actionDetails(actionNotice)}</p>
-          </div>
+      {toast && (
+        <div className="templates-toast" role="alert">
+          <AlertCircle aria-hidden="true" />
+          <span>{toast}</span>
+          <button type="button" aria-label="Закрыть уведомление" onClick={() => setToast("")}>
+            <X aria-hidden="true" />
+          </button>
         </div>
       )}
     </section>
