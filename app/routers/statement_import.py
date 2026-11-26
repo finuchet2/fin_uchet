@@ -1,3 +1,4 @@
+from app.models import BusinessProject, Category
 import datetime
 from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -110,6 +111,8 @@ def get_batch_preview(batch_id: int, db: Session = Depends(get_db)):
                 "operation_type": sug.operation_type,
                 "category_id": sug.category_id,
                 "project_id": sug.project_id,
+                    "category_name": (db.query(Category.name).filter(Category.id == int(sug.category_id)).scalar() if sug.category_id and str(sug.category_id).isdigit() else None),
+                    "project_name": (db.query(BusinessProject.name).filter(BusinessProject.id == int(sug.project_id)).scalar() if sug.project_id and str(sug.project_id).isdigit() else None),
                 "business_status": sug.business_status,
                 "confidence": sug.confidence,
                 "reason": sug.reason,
@@ -217,6 +220,8 @@ def update_imported_transaction(transaction_id: int, payload: TransactionUpdateR
         "suggestion": {
             "category_id": sug.category_id,
             "project_id": sug.project_id,
+                    "category_name": (db.query(Category.name).filter(Category.id == int(sug.category_id)).scalar() if sug.category_id and str(sug.category_id).isdigit() else None),
+                    "project_name": (db.query(BusinessProject.name).filter(BusinessProject.id == int(sug.project_id)).scalar() if sug.project_id and str(sug.project_id).isdigit() else None),
             "business_status": sug.business_status,
             "user_decision": sug.user_decision,
         },

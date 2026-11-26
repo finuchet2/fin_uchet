@@ -47,7 +47,7 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "reason": "Совпадение со справочником правил по ключевому слову или контрагенту.",
     },
     {
-        "keywords": ["ростелеком", "интернет", "связь"],
+        "keywords": ["ростелеком", "оплата интернета", "услуги связи", "связь в офисе"],
         "counterparties": ["ростелеком"],
         "operation_type": "expense",
         "category_name": "Интернет и связь",
@@ -289,7 +289,7 @@ def match_rules(db: Session, record: dict[str, Any], user_id: int | None = None)
     for item in DEFAULT_RULES:
         kw_hit = any(k in haystack for k in item["keywords"])
         cp_hit = any(c in haystack for c in item["counterparties"])
-        if kw_hit or cp_hit:
+        if (kw_hit or cp_hit) and not (item["operation_type"] == "expense" and _norm(record.get("direction")) == "income"):
             return {
                 "operation_type": item["operation_type"],
                 "category_ref": item["category_name"],
@@ -725,7 +725,7 @@ def classify_with_llm(record, user_context=None):
         chat_url = 'https' + '://gigachat.devices.' + 'sberbank.ru/api/v1/chat/completions'
         context = user_context or {'projects': [], 'categories': []}
         payload = {'transaction': {'description': record.get('description'), 'counterparty': record.get('counterparty'), 'amount': record.get('amount'), 'direction': record.get('direction')}, 'available_projects': context.get('projects', []), 'available_categories': context.get('categories', []), 'allowed_operation_types': OPERATION_TYPES}
-        sys_msg = 'Ты финансовый классификатор. Выбирай project_id и category_id ТОЛЬКО из available_projects и available_categories по числовому id (или null, если не подходит). Если операция относится к бизнесу или проекту пользователя, ставь business_status=business; если личная трата - personal; если неясно - undefined. Верни ТОЛЬКО JSON-объект с ключами operation_type, category_id, project_id, business_status, confidence, reason.'
+        sys_msg = 'Ты финансовый классификатор. Выбирай project_id и category_id ТОЛЬКО из available_projects и available_categories по числовому id (или null, если не подходит). Правила: 1) Для direction=income выбирай ТОЛЬКО доходные категории (Выручка, Прочие доходы, Возвраты) и НИКОГДА не ставь расходные. 2) Для личных трат (продукты, снятие наличных через банкомат, перевод физлицу) НИКОГДА не ставь Банковские комиссии, ставь ставь business_status=personal, project_id=null, category_id=null. 3) Для коммуналки и электроэнергии выбирай Коммунальные услуги; для налогов ФНС/УСН — УСН 6% или Налоговые платежи; для курьерской доставки — Логистика и доставка. 4) Если ни одна категория из available_categories не подходит по смыслу (например, покупка оборудования или перевод без детализации), ставь category_id=null, не выдумывай и не подставляй Аренду. 5) Привязывай операцию к project_id, если она относится к деятельности проекта (в т.ч. коммуналка и аренда для ПВЗ). Если операция относится к бизнесу, ставь business_status=business; если личная - personal; если неясно - undefined. Верни ТОЛЬКО JSON-объект с ключами operation_type, category_id, project_id, business_status, confidence, reason.'
         body = {'model': (os.getenv('LLM_MODEL') or 'GigaChat').strip(), 'temperature': 0.1, 'messages': [{'role': 'system', 'content': sys_msg}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]}
         req = url_request.Request(chat_url, data=json.dumps(body).encode('utf-8'), headers={'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': 'Bearer ' + token}, method='POST')
         raw = json.loads(url_request.urlopen(req, timeout=20, context=ctx).read().decode('utf-8'))
