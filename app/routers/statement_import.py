@@ -171,7 +171,7 @@ def update_imported_transaction(transaction_id: int, payload: TransactionUpdateR
     if payload.category_id is not None:
         resolved_id = resolve_category_id(
             db=db,
-            category_name=str(payload.category_id),
+            category_ref=str(payload.category_id),
             operation_type=sug.operation_type or tx.operation_type,
             user_id=batch.user_id if batch else None,
         )
@@ -193,7 +193,7 @@ def update_imported_transaction(transaction_id: int, payload: TransactionUpdateR
             keyword=tx.description,
             counterparty=tx.counterparty,
             operation_type=tx.operation_type,
-            category_name=sug.category_id,
+            category_ref=sug.category_id,
             project_name=sug.project_id,
             business_status=sug.business_status,
         ))
