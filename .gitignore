@@ -47,3 +47,6 @@ dist/
 
 # === Jupyter Notebooks (если используешь для анализа) ===
 .ipynb_checkpoints/
+# === Frontend dependencies ===
+frontend/node_modules/
+frontend/.vite/

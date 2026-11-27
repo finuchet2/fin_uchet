@@ -115,117 +115,89 @@ fin_uchet/
 - Node.js и npm.
 - PostgreSQL.
 
-### 1. Клонирование репозитория
+### Клонирование репозитория
 
 ```bash
 git clone https://github.com/finuchet2/fin_uchet.git
 cd fin_uchet
 ```
 
-### 2. Настройка Backend
+## Запуск на Windows
 
-Создайте виртуальное окружение:
+### 1. Создать базу PostgreSQL
 
-```bash
-python -m venv venv
-```
+Создай в PostgreSQL пустую базу с именем `finzentra`. Если у тебя уже есть база с другим именем, укажи его в `DATABASE_URL`.
 
-Активируйте его:
+### 2. Настроить backend
 
-```bash
-# Windows
-venv\Scripts\activate
+Открой терминал в корневой папке проекта (там, где `requirements.txt`):
 
-# Linux / macOS
-source venv/bin/activate
-```
-
-Установите зависимости:
-
-```bash
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install email-validator
+Copy-Item .env.example .env
 ```
 
-Создайте в корне проекта файл `.env`:
+Открой корневой `.env` и обязательно замени:
 
 ```env
-DATABASE_URL=postgresql+psycopg2://postgres:your_password@localhost:5432/postgres
-
-SECRET_KEY=your_secret_key
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+DATABASE_URL=postgresql+psycopg2://postgres:YOUR_PASSWORD@localhost:5432/finzentra
+SECRET_KEY=REPLACE_WITH_A_LONG_RANDOM_SECRET
 ```
 
-Замените `your_password` на пароль пользователя PostgreSQL, а `your_secret_key` — на собственный секретный ключ.
+`YOUR_PASSWORD` — пароль PostgreSQL. `SECRET_KEY` — длинная случайная строка. Не отправляй `.env` в GitHub и никому не пересылай ключи.
 
-Убедитесь, что PostgreSQL запущен и указанная база данных существует.
+Примени миграции из корневой папки проекта:
 
-Запустите сервер из корневой папки проекта:
+```powershell
+alembic -c database/alembic.ini upgrade head
+```
 
-```bash
+Запусти backend:
+
+```powershell
 uvicorn app.main:app --reload --port 8000
 ```
 
-После запуска:
-- API: http://localhost:8000
-- Интерактивная документация API: http://localhost:8000/docs
+Проверка API: http://localhost:8000/health
+Документация API: http://localhost:8000/docs
 
-### 3. Настройка Frontend
+### 3. Настроить и запустить frontend
 
-Откройте отдельный терминал и перейдите в папку frontend:
+Открой второй терминал:
 
-```bash
+```powershell
 cd frontend
-```
-
-Установите зависимости:
-
-```bash
-npm install
-```
-
-Создайте файл `.env.local` в папке `frontend`:
-
-```env
-VITE_API_URL=http://localhost:8000
-```
-
-Запустите frontend:
-
-```bash
+Copy-Item .env.example .env
+npm ci
 npm run dev
 ```
 
-Откройте адрес, указанный Vite в терминале (обычно http://localhost:5173).
+Открой http://localhost:5173.
 
-### 4. Сборка Frontend
+В `frontend/.env` должны быть значения:
 
-Для создания production-сборки выполните:
-
-```bash
-npm run build
+```env
+VITE_API_URL=http://localhost:8000
+VITE_USE_IMPORT_API=true
 ```
 
-Для локального просмотра собранной версии:
+Если меняешь `.env`, перезапусти Vite.
 
-```bash
-npm run preview
+## Подключение GigaChat
+
+В корневом `.env` укажи ключ авторизации GigaChat:
+
+```env
+GIGACHAT_AUTH_KEY=YOUR_GIGACHAT_AUTHORIZATION_KEY
+GIGACHAT_SCOPE=GIGACHAT_API_PERS
+LLM_MODEL=GigaChat
 ```
 
-## Разработка и проверка
+`GIGACHAT_AUTH_KEY` — Basic authorization key из кабинета GigaChat API. Не добавляй его в исходный код или GitHub. После изменения `.env` перезапусти backend.
 
-В папке `frontend` доступны команды:
-
-```bash
-npm run typecheck
-npm run lint
-npm run build
-```
-
-- `typecheck` — проверка типов TypeScript.
-- `lint` — проверка кода ESLint.
-- `build` — сборка приложения.
+В исходном классификаторе предусмотрен OpenAI-compatible fallback, если `GIGACHAT_AUTH_KEY` не задан. Для его использования отдельно заполни `LLM_API_URL`, `LLM_API_KEY` и `LLM_MODEL`. Основная настройка этой сборки — GigaChat.
 
 ## Текущий статус проекта
 

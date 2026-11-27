@@ -1,12 +1,11 @@
 import {
   Fragment,
   createContext,
-  Dispatch,
   FormEvent,
   KeyboardEvent,
   ReactNode,
-  SetStateAction,
   useContext,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -16,16 +15,19 @@ import {
 import { createPortal } from "react-dom";
 import FinancialDashboard from "./FinancialDashboard";
 import BankStatementUpload from "./BankStatementUpload";
+import ProjectCreationModal from "./ProjectCreationModal";
+import ProjectCategoriesModal from "./ProjectCategoriesModal";
+import type { IndustryProjectTemplate, ProjectCategoryBuckets, ProjectCategoryTab } from "./types/templates";
 import CustomSelect from "./CustomSelect";
 import TruncatedValue from "./TruncatedValue";
 import { currencyTruncationThreshold, formatThresholdCurrency } from "./currency";
-import { usePersistentState } from "./hooks/usePersistentState";
 import { apiRequest } from "./api/client";
+import { financeApi, type ApiCategory, type ApiProject, type ApiTransaction, type ApiTransactionType } from "./api/financeApi";
 import type { LedgerOperationInput } from "./types/import";
 
 type Screen = "home" | "register" | "login" | "recover" | "new-password" | "app";
 
-type AppUser = { name: string };
+type AppUser = { id?: number; name: string };
 type RegistrationMethod = "email" | "phone";
 type RegistrationField = "name" | "contact" | "password" | "confirmation";
 type RegistrationValues = Record<RegistrationField, string>;
@@ -425,10 +427,16 @@ function Registration({ navigate }: { navigate: (screen: Screen) => void }) {
           password: values.password
         }
       });
+      const auth = await apiRequest<{ access_token: string }>("/api/auth/login", {
+        method: "POST",
+        body: { username: contact, password: values.password },
+      });
+      localStorage.setItem("token", auth.access_token);
+      const profile = await apiRequest<{ id: number; name?: string | null }>("/api/auth/me");
 
       setLoading(false);
       setSuccess(true);
-      setUser({ name: values.name.trim() });
+      setUser({ id: profile.id, name: profile.name || values.name.trim() });
       window.setTimeout(() => navigate("app"), 800);
       
     } catch (error: any) {
@@ -489,6 +497,7 @@ function Registration({ navigate }: { navigate: (screen: Screen) => void }) {
 }
 
 function Login({ navigate }: { navigate: (screen: Screen) => void }) {
+  const { setUser } = useAppUser();
   const [contact, setContact] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -543,8 +552,10 @@ function Login({ navigate }: { navigate: (screen: Screen) => void }) {
         }
       });
 
-      // Сохраняем JWT-токен
+      // Сохраняем JWT-токен и загружаем профиль пользователя.
       localStorage.setItem("token", data.access_token);
+      const profile = await apiRequest<{ id: number; name?: string | null }>("/api/auth/me");
+      setUser({ id: profile.id, name: profile.name || "Пользователь" });
 
       setLoading(false);
       navigate("app");
@@ -824,6 +835,36 @@ type Operation = {
   amount: number;
   paidByPersonalFunds?: boolean;
 };
+
+function uiDateToApiDate(value: string): string {
+  const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(value.trim());
+  if (!match) throw new Error("Дата должна быть указана в формате ДД.ММ.ГГГГ");
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function apiDateToUiDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : value;
+}
+
+function toApiTransactionType(type: OperationType): ApiTransactionType {
+  return type === "income" ? "INCOME" : type === "tax" ? "TAX" : "EXPENSE";
+}
+
+function fromApiTransaction(row: ApiTransaction, projects: ApiProject[], categories: ApiCategory[]): Operation {
+  const project = projects.find((item) => item.id === row.project_id);
+  const category = categories.find((item) => item.id === row.category_id);
+  return {
+    id: String(row.id),
+    type: row.type === "INCOME" ? "income" : row.type === "TAX" ? "tax" : "expense",
+    category: category?.name ?? "Без категории",
+    project: project?.name ?? "Неизвестный проект",
+    date: apiDateToUiDate(row.date_fact),
+    periodDate: apiDateToUiDate(row.date_period),
+    comment: row.comment ?? "",
+    amount: row.type === "INCOME" ? Number(row.amount) : -Number(row.amount),
+  };
+}
 
 function formatDateInput(value: string) {
   const digits = value.replace(/\D/g, "").slice(0, 8);
@@ -1438,13 +1479,18 @@ function OperationsContent({ operations, projects, onAdd, onDelete, onEdit, peri
 
 type OperationDrawerType = "expense" | "income" | "tax";
 
-function OperationDrawer({ operation, projects, categories, onClose, onSaved, onCreateProject }: {
+function OperationDrawer({ operation, projects, categories, apiCategories, onClose, onSaved, onCreateProject }: {
   operation: Operation | null;
   projects: DirectoryProject[];
   categories: Record<OperationType, string[]>;
+  apiCategories: ApiCategory[];
   onClose: () => void;
-  onSaved: (op: Operation) => void;
-  onCreateProject: (name: string, description: string) => DirectoryProject;
+  onSaved: (op: Operation) => void | Promise<void>;
+  onCreateProject: (
+    name: string,
+    description: string,
+    template?: IndustryProjectTemplate | null,
+  ) => Promise<DirectoryProject>;
 }) {
   const activeProjects = projects.filter((p) => !p.archived);
   const [type, setType] = useState<OperationDrawerType>(operation?.type ?? "expense");
@@ -1462,10 +1508,20 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
   const [newProjectError, setNewProjectError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const typeCategories = operation?.type === type && !categories[type].includes(operation.category)
-    ? [operation.category, ...categories[type]]
-    : categories[type];
+  const selectedProjectId = Number(activeProjects.find((item) => item.name === project)?.id ?? 0);
+  const scopedCategoryNames = apiCategories
+    .filter((item) => item.is_active && item.type === (type === "income" ? "INCOME" : type === "tax" ? "TAX" : "EXPENSE")
+      && (item.project_id === selectedProjectId || item.project_id == null))
+    .map((item) => item.name);
+  const availableCategoryNames = scopedCategoryNames;
+  const typeCategories = operation?.type === type && !availableCategoryNames.includes(operation.category)
+    ? [operation.category, ...availableCategoryNames]
+    : availableCategoryNames;
+  useEffect(() => {
+    setCategory((current) => typeCategories.includes(current) ? current : (typeCategories[0] ?? ""));
+  }, [project, type]);
   const commentLimit = 255;
 
   const switchType = (next: OperationDrawerType) => {
@@ -1478,7 +1534,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
     return raw.replace(/[^\d,.]/g, "").replace(/\./g, ",");
   };
 
-  const save = () => {
+  const save = async () => {
     const nextFieldErrors = {
       amount: !amount
         ? "Введите сумму"
@@ -1511,10 +1567,12 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
       amount: type === "income" ? numeric : -numeric,
       ...(operation?.paidByPersonalFunds ? { paidByPersonalFunds: true } : {}),
     };
-    onSaved(op);
+    setSaving(true);
+    try { await onSaved(op); }
+    finally { setSaving(false); }
   };
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
     const clean = newProjectName.trim();
     if (clean.length < 2) {
       setNewProjectError("Название должно содержать минимум 2 символа");
@@ -1524,8 +1582,13 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
       setNewProjectError("Проект с таким названием уже существует");
       return;
     }
-    const created = onCreateProject(clean, newProjectDescription.trim());
-    setProject(created.name);
+    try {
+      const created = await onCreateProject(clean, newProjectDescription.trim());
+      setProject(created.name);
+    } catch (cause) {
+      setNewProjectError(cause instanceof Error ? cause.message : "Не удалось создать проект");
+      return;
+    }
     setProjectModalOpen(false);
     setNewProjectName("");
     setNewProjectDescription("");
@@ -1597,7 +1660,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
                 <CabinetIcon name="projects" />
                 <CustomDropdown
                   value={project}
-                  onChange={setProject}
+                  onChange={(nextProject) => { setProject(nextProject); }}
                   ariaLabel="Проект операции"
                   options={activeProjects.length
                     ? activeProjects.map((item) => ({ value: item.name, label: item.name }))
@@ -1639,7 +1702,7 @@ function OperationDrawer({ operation, projects, categories, onClose, onSaved, on
 
         <div className="drawer__footer">
           <button type="button" className="directory-btn directory-btn--ghost" onClick={onClose}>Отмена</button>
-          <button type="button" className="directory-btn directory-btn--primary" onClick={save}>
+          <button type="button" className="directory-btn directory-btn--primary" onClick={save} disabled={saving}>
             <CabinetIcon name="check" /><span>Сохранить</span>
           </button>
         </div>
@@ -1678,15 +1741,25 @@ type DirectoryProject = {
   description: string;
   archived: boolean;
   operations: number;
+  categoriesCount?: number;
   color?: string;
 };
 
 const projectColors = ["#2563EB", "#10B981", "#8B5CF6", "#F59E0B", "#EC4899", "#06B6D4", "#6366F1"];
 
-function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
+function ProjectsContent({ projects, onCreateProject, onUpdateProject, onSetProjectActive, onDeleteProject, onProjectRenamed, operations, onFinanceDataChanged }: {
   projects: DirectoryProject[];
-  setProjects: Dispatch<SetStateAction<DirectoryProject[]>>;
+  onCreateProject: (
+    name: string,
+    description: string,
+    template?: IndustryProjectTemplate | null,
+  ) => Promise<DirectoryProject>;
+  onUpdateProject: (id: string, name: string, description: string) => Promise<void>;
+  onSetProjectActive: (id: string, active: boolean) => Promise<void>;
+  onDeleteProject: (project: DirectoryProject) => Promise<void>;
   onProjectRenamed: (previousName: string, nextName: string) => void;
+  operations: Operation[];
+  onFinanceDataChanged: () => Promise<void>;
 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1694,6 +1767,23 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [categoriesProject, setCategoriesProject] = useState<{ project: DirectoryProject; categories: ProjectCategoryBuckets } | null>(null);
+  const [categoryBusy, setCategoryBusy] = useState(false);
+  const loadProjectCategories = async (project: DirectoryProject) => {
+    const rows = await financeApi.getCategories(Number(project.id), true);
+    const scoped = rows.filter((item) => item.project_id === Number(project.id));
+    const buckets: ProjectCategoryBuckets = { expenses: [], income: [], taxes: [] };
+    for (const item of scoped) {
+      const key = item.type === "INCOME" ? "income" : item.type === "TAX" ? "taxes" : "expenses";
+      buckets[key].push({ id: String(item.id), name: item.name, type: item.type, system: item.is_system, active: item.is_active });
+    }
+    setCategoriesProject({ project, categories: buckets });
+  };
+  const categoryTypeForTab = (tab: ProjectCategoryTab): ApiTransactionType => tab === "income" ? "INCOME" : tab === "taxes" ? "TAX" : "EXPENSE";
+  const refreshProjectCategories = async () => {
+    if (categoriesProject) await loadProjectCategories(categoriesProject.project);
+    await onFinanceDataChanged();
+  };
   const activeCount = projects.filter((item) => !item.archived).length;
   const archivedCount = projects.length - activeCount;
 
@@ -1717,36 +1807,50 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
     setNotice(text);
     window.setTimeout(() => setNotice(""), 3200);
   };
-  const saveProject = () => {
+  const saveProject = async () => {
     const cleanName = name.trim();
+    if (projects.some((item) => item.name.toLocaleLowerCase() === cleanName.toLocaleLowerCase() && item.id !== editingId)) {
+      setError("Проект с таким названием уже существует");
+      return;
+    }
     if (cleanName.length < 2) {
       setError("Название должно содержать минимум 2 символа");
       return;
     }
     if (editingId) {
       const previousName = projects.find((item) => item.id === editingId)?.name;
-      setProjects((current) => current.map((item) => (item.id === editingId ? { ...item, name: cleanName, description: description.trim() || "Без описания" } : item)));
-      if (previousName && previousName !== cleanName) onProjectRenamed(previousName, cleanName);
-      flash("Проект «" + cleanName + "» переименован");
+      try {
+        await onUpdateProject(editingId, cleanName, description.trim() || "Без описания");
+        if (previousName && previousName !== cleanName) onProjectRenamed(previousName, cleanName);
+        flash("Проект «" + cleanName + "» переименован");
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Не удалось обновить проект");
+        return;
+      }
     } else {
-      setProjects((current) => [...current, { id: "p-" + Date.now(), name: cleanName, description: description.trim() || "Новый проект", archived: false, operations: 0, color: projectColors[projects.length % projectColors.length] }]);
-      flash("Проект «" + cleanName + "» создан");
+      try {
+        await onCreateProject(cleanName, description.trim() || "Новый проект");
+        flash("Проект «" + cleanName + "» создан");
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Не удалось создать проект");
+        return;
+      }
     }
     setFormOpen(false);
   };
 
-  const archiveProject = (id: string) => {
-    setProjects((current) => current.map((item) => (item.id === id ? { ...item, archived: true } : item)));
-    flash("Проект отправлен в архив");
+  const archiveProject = async (id: string) => {
+    try { await onSetProjectActive(id, false); flash("Проект отправлен в архив"); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось архивировать проект"); }
   };
-  const restoreProject = (id: string) => {
-    setProjects((current) => current.map((item) => (item.id === id ? { ...item, archived: false } : item)));
-    flash("Проект восстановлен из архива");
+  const restoreProject = async (id: string) => {
+    try { await onSetProjectActive(id, true); flash("Проект восстановлен из архива"); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось восстановить проект"); }
   };
-  const deleteProject = (project: DirectoryProject) => {
+  const deleteProject = async (project: DirectoryProject) => {
     if (project.operations !== 0) return;
-    setProjects((current) => current.filter((item) => item.id !== project.id));
-    flash(`Проект «${project.name}» удалён`);
+    try { await onDeleteProject(project); flash(`Проект «${project.name}» удалён`); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось удалить проект"); }
   };
 
   return (
@@ -1792,10 +1896,17 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
                 </div>
                 <h3>{project.name}</h3>
                 <p className="project-card__description">{project.description}</p>
-                <p className="project-card__meta">{project.operations} операций</p>
+                <p className="project-card__meta">{project.operations} операций • {project.categoriesCount ?? 0} категорий</p>
                 <div className="project-card__actions">
                   {!project.archived ? (
                     <>
+                      <button type="button" className="directory-btn directory-btn--ghost" onClick={async () => {
+                        try { await loadProjectCategories(project); }
+                        catch (cause) { setError(cause instanceof Error ? cause.message : "Не удалось загрузить категории проекта"); }
+                      }}>
+                        <CabinetIcon name="settings" />
+                        <span>Категории</span>
+                      </button>
                       <button type="button" className="directory-btn directory-btn--ghost" onClick={() => openEdit(project)}>
                         <CabinetIcon name="edit" />
                         <span>Редактировать</span>
@@ -1835,7 +1946,40 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
           </div>
         </>
       )}
-      {formOpen && (
+      {categoriesProject && (
+        <ProjectCategoriesModal
+          projectName={categoriesProject.project.name}
+          categories={categoriesProject.categories}
+          operations={operations.map((item) => ({ type: item.type, category: item.category, project: item.project }))}
+          onClose={() => setCategoriesProject(null)}
+          onAddCategory={async (tab, categoryName) => {
+            if (categoryBusy || !categoriesProject) return false;
+            setCategoryBusy(true);
+            try {
+              await financeApi.createProjectCategory(Number(categoriesProject.project.id), { name: categoryName, type: categoryTypeForTab(tab), is_active: true });
+              await refreshProjectCategories();
+              return true;
+            } catch (cause) { throw new Error(cause instanceof Error ? cause.message : "Не удалось добавить категорию"); }
+            finally { setCategoryBusy(false); }
+          }}
+          onRenameCategory={async (_tab, categoryId, nextName) => {
+            if (!categoriesProject) return false;
+            try { await financeApi.updateProjectCategory(Number(categoriesProject.project.id), Number(categoryId), { name: nextName }); await refreshProjectCategories(); return true; }
+            catch (cause) { throw new Error(cause instanceof Error ? cause.message : "Не удалось переименовать категорию"); }
+          }}
+          onToggleCategory={async (_tab, categoryId, active) => {
+            if (!categoriesProject) return;
+            try { await financeApi.updateProjectCategory(Number(categoriesProject.project.id), Number(categoryId), { is_active: active }); await refreshProjectCategories(); }
+            catch (cause) { throw new Error(cause instanceof Error ? cause.message : "Не удалось изменить категорию"); }
+          }}
+          onDeleteCategory={async (_tab, categoryId) => {
+            if (!categoriesProject) return;
+            try { await financeApi.deleteProjectCategory(Number(categoriesProject.project.id), Number(categoryId)); await refreshProjectCategories(); }
+            catch (cause) { throw new Error(cause instanceof Error ? cause.message : "Не удалось удалить категорию"); }
+          }}
+        />
+      )}
+      {formOpen && editingId && (
         <div className="directory-modal" role="dialog" aria-modal="true">
           <div className="directory-modal__card">
             <div className="directory-modal__head">
@@ -1857,6 +2001,17 @@ function ProjectsContent({ projects, setProjects, onProjectRenamed }: {
             </div>
           </div>
         </div>
+      )}
+      {formOpen && !editingId && (
+        <ProjectCreationModal
+          existingProjectNames={projects.map((item) => item.name)}
+          onClose={() => setFormOpen(false)}
+          onConfirm={async ({ name: projectName, description: projectDescription, template }) => {
+            await onCreateProject(projectName, projectDescription, template);
+            setFormOpen(false);
+            flash(`Проект «${projectName}» создан`);
+          }}
+        />
       )}
     </section>
   );
@@ -1890,22 +2045,25 @@ const initialLiveCategories: Record<CategoryTab, LiveCategory[]> = {
   ],
 };
 
-function SettingsContent({ categories, setCategories, operations }: {
+function SettingsContent({ categories, operations, onAddCategory, onToggleCategory, onDeleteCategory }: {
   categories: Record<CategoryTab, LiveCategory[]>;
-  setCategories: Dispatch<SetStateAction<Record<CategoryTab, LiveCategory[]>>>;
   operations: Operation[];
+  onAddCategory: (name: string, type: ApiTransactionType) => Promise<void>;
+  onToggleCategory: (id: number, active: boolean) => Promise<void>;
+  onDeleteCategory: (id: number) => Promise<void>;
 }) {
   const [tab, setTab] = useState<CategoryTab>("expenses");
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
   const [pendingRemoval, setPendingRemoval] = useState<{ category: LiveCategory; count: number } | null>(null);
+  const [savingCategory, setSavingCategory] = useState(false);
   const list = categories[tab];
   const showMessage = (text: string) => {
     setMessage(text);
     window.setTimeout(() => setMessage(""), 3000);
   };
 
-  const addCategory = () => {
+  const addCategory = async () => {
     const clean = draft.trim();
     if (clean.length < 2) {
       showMessage("Введите название от 2 символов");
@@ -1915,12 +2073,27 @@ function SettingsContent({ categories, setCategories, operations }: {
       showMessage("Такая категория уже есть");
       return;
     }
-    setCategories((current) => ({ ...current, [tab]: [...current[tab], { id: "c-" + Date.now(), name: clean, system: false, active: true }] }));
-    setDraft("");
-    showMessage("Категория «" + clean + "» добавлена");
+    setSavingCategory(true);
+    try {
+      const type: ApiTransactionType = tab === "expenses" ? "EXPENSE" : tab === "income" ? "INCOME" : "TAX";
+      await onAddCategory(clean, type);
+      setDraft("");
+      showMessage("Категория «" + clean + "» добавлена");
+    } catch (cause) {
+      showMessage(cause instanceof Error ? cause.message : "Не удалось сохранить категорию");
+    } finally {
+      setSavingCategory(false);
+    }
   };
-  const toggleCategory = (id: string) => {
-    setCategories((current) => ({ ...current, [tab]: current[tab].map((item) => (item.id === id ? { ...item, active: !item.active } : item)) }));
+  const toggleCategory = async (id: string, active: boolean) => {
+    setSavingCategory(true);
+    try {
+      await onToggleCategory(Number(id), active);
+    } catch (cause) {
+      showMessage(cause instanceof Error ? cause.message : "Не удалось изменить категорию");
+    } finally {
+      setSavingCategory(false);
+    }
   };
 
   const removeCategory = (id: string) => {
@@ -1932,16 +2105,19 @@ function SettingsContent({ categories, setCategories, operations }: {
       setPendingRemoval({ category: target, count });
       return;
     }
-    setCategories((current) => ({ ...current, [tab]: current[tab].filter((item) => item.id !== id) }));
-    showMessage("Категория «" + target.name + "» удалена");
+    void onDeleteCategory(Number(id)).then(() => showMessage("Категория «" + target.name + "» удалена"))
+      .catch((cause) => showMessage(cause instanceof Error ? cause.message : "Не удалось удалить категорию"));
   };
 
   const confirmCategoryRemoval = () => {
     if (!pendingRemoval) return;
     const target = pendingRemoval.category;
-    setCategories((current) => ({ ...current, [tab]: current[tab].filter((item) => item.id !== target.id) }));
-    setPendingRemoval(null);
-    showMessage("Категория «" + target.name + "» удалена");
+    setSavingCategory(true);
+    void onDeleteCategory(Number(target.id)).then(() => {
+      setPendingRemoval(null);
+      showMessage("Категория «" + target.name + "» скрыта: связанные операции сохранены");
+    }).catch((cause) => showMessage(cause instanceof Error ? cause.message : "Не удалось удалить категорию"))
+      .finally(() => setSavingCategory(false));
   };
 
   return (
@@ -1959,7 +2135,7 @@ function SettingsContent({ categories, setCategories, operations }: {
       </div>
       <div className="directory-add">
         <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название новой категории" aria-label="Название новой категории" maxLength={48} onKeyDown={(e) => { if (e.key === "Enter") addCategory(); }} />
-        <button type="button" className="cabinet-primary" onClick={addCategory}>
+        <button type="button" className="cabinet-primary" onClick={() => void addCategory()} disabled={savingCategory}>
           <CabinetIcon name="plus" />
           <span>Добавить</span>
         </button>
@@ -1984,7 +2160,7 @@ function SettingsContent({ categories, setCategories, operations }: {
               </span>
             )}
             <label className="switch">
-              <input type="checkbox" checked={category.active} onChange={() => toggleCategory(category.id)} aria-label={`${category.name}: ${category.active ? "Активна" : "Скрыта"}`} />
+              <input type="checkbox" checked={category.active} disabled={savingCategory} onChange={(event) => void toggleCategory(category.id, event.target.checked)} aria-label={`${category.name}: ${category.active ? "Активна" : "Скрыта"}`} />
               <span className="switch__track"><span className="switch__thumb" /></span>
               <em>{category.active ? "Активна" : "Скрыта"}</em>
             </label>
@@ -2016,7 +2192,7 @@ function SettingsContent({ categories, setCategories, operations }: {
             </div>
             <p className="operation-delete-modal__message">
               Категория «{pendingRemoval.category.name}» используется в {pendingRemoval.count} {pendingRemoval.count === 1 ? "операции" : "операциях"}.
-              При удалении связанные операции потеряют привязку. Вы уверены, что хотите продолжить?
+              Она будет скрыта из новых операций, а существующие операции сохранят эту категорию. Продолжить?
             </p>
             <div className="directory-modal__actions">
               <button type="button" className="directory-btn directory-btn--ghost" onClick={() => setPendingRemoval(null)}>Отмена</button>
@@ -2032,67 +2208,83 @@ function SettingsContent({ categories, setCategories, operations }: {
   );
 }
 
-const STORAGE_KEYS = {
-  operations: "bifintra_bolt_operations",
-  projects: "bifintra_bolt_projects",
-  categories: "bifintra_bolt_categories",
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
-
-function isOperation(value: unknown): value is Operation {
-  return isRecord(value)
-    && typeof value.id === "string"
-    && (value.type === "income" || value.type === "expense" || value.type === "tax")
-    && typeof value.category === "string"
-    && typeof value.project === "string"
-    && typeof value.date === "string"
-    && typeof value.periodDate === "string"
-    && typeof value.comment === "string"
-    && typeof value.amount === "number" && Number.isFinite(value.amount)
-    && (value.paidByPersonalFunds === undefined || typeof value.paidByPersonalFunds === "boolean");
-}
-
-function isDirectoryProject(value: unknown): value is DirectoryProject {
-  return isRecord(value)
-    && typeof value.id === "string"
-    && typeof value.name === "string"
-    && typeof value.description === "string"
-    && typeof value.archived === "boolean"
-    && typeof value.operations === "number" && Number.isFinite(value.operations)
-    && (value.color === undefined || typeof value.color === "string");
-}
-
-function isLiveCategory(value: unknown): value is LiveCategory {
-  return isRecord(value)
-    && typeof value.id === "string"
-    && typeof value.name === "string"
-    && typeof value.system === "boolean"
-    && typeof value.active === "boolean";
-}
-
-const isOperationList = (value: unknown): value is Operation[] => Array.isArray(value) && value.every(isOperation);
-const isProjectList = (value: unknown): value is DirectoryProject[] => Array.isArray(value) && value.every(isDirectoryProject);
-const isLiveCategories = (value: unknown): value is Record<CategoryTab, LiveCategory[]> =>
-  isRecord(value) && (["expenses", "income", "taxes"] as const).every((tab) => {
-    const list = value[tab];
-    return Array.isArray(list) && list.every(isLiveCategory);
-  });
-
 function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
-  const { user } = useAppUser();
+  const { user, setUser } = useAppUser();
   const userName = user.name;
-  const [section, setSection] = useState<CabinetSection>("dashboard");
+  // Активный раздел хранится отдельно для каждого пользователя.
+  const sectionStorageKey = `finzentra_active_section_${user.id ?? "unknown"}`;
+  const [section, setSection] = useState<CabinetSection>(() => {
+    try {
+      const savedSection = localStorage.getItem(sectionStorageKey);
+      const validSections: CabinetSection[] = ["dashboard", "operations", "projects", "settings", "statement"];
+      return validSections.includes(savedSection as CabinetSection)
+        ? (savedSection as CabinetSection)
+        : "dashboard";
+    } catch {
+      return "dashboard";
+    }
+  });
   const [reviewFileName, setReviewFileName] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingOperation, setEditingOperation] = useState<Operation | null>(null);
   const [opNotice, setOpNotice] = useState("");
   const [pendingDeletion, setPendingDeletion] = useState<Operation | null>(null);
   const [deletingOperation, setDeletingOperation] = useState(false);
-  const [operations, setOperations] = usePersistentState<Operation[]>(STORAGE_KEYS.operations, [], isOperationList);
-  const [projects, setProjects] = usePersistentState<DirectoryProject[]>(STORAGE_KEYS.projects, [], isProjectList);
-  const [liveCategories, setLiveCategories] = usePersistentState<Record<CategoryTab, LiveCategory[]>>(STORAGE_KEYS.categories, initialLiveCategories, isLiveCategories);
+  // Финансовые данные загружаются с API и больше не хранятся общей копией в localStorage.
+  const [operations, setOperations] = useState<Operation[]>([]);
+  const [projects, setProjects] = useState<DirectoryProject[]>([]);
+  const [liveCategories, setLiveCategories] = useState<Record<CategoryTab, LiveCategory[]>>(initialLiveCategories);
+  const [apiCategories, setApiCategories] = useState<ApiCategory[]>([]);
+  const [financeLoading, setFinanceLoading] = useState(true);
+  const [financeError, setFinanceError] = useState("");
   const [selectedProjectNames, setSelectedProjectNames] = useState<string[]>([]);
+
+  const loadFinanceData = useCallback(async () => {
+    setFinanceError("");
+    try {
+      const [apiProjects, apiTransactions, categories] = await Promise.all([
+        financeApi.getProjects(), financeApi.getTransactions(), financeApi.getCategories(undefined, true),
+      ]);
+      const projectCounts = new Map<number, number>();
+      for (const transaction of apiTransactions) {
+        projectCounts.set(transaction.project_id, (projectCounts.get(transaction.project_id) ?? 0) + 1);
+      }
+      const mappedProjects: DirectoryProject[] = apiProjects.map((item) => ({
+        id: String(item.id), name: item.name, description: item.description ?? "Без описания",
+        archived: !item.is_active, operations: projectCounts.get(item.id) ?? 0,
+        categoriesCount: categories.filter((category) => category.project_id === item.id).length,
+      }));
+      setProjects(mappedProjects);
+      setApiCategories(categories);
+      setLiveCategories({
+        expenses: categories.filter((item) => item.project_id == null && item.type === "EXPENSE").map((item) => ({ id: String(item.id), name: item.name, system: item.is_system, active: item.is_active })),
+        income: categories.filter((item) => item.project_id == null && item.type === "INCOME").map((item) => ({ id: String(item.id), name: item.name, system: item.is_system, active: item.is_active })),
+        taxes: categories.filter((item) => item.project_id == null && item.type === "TAX").map((item) => ({ id: String(item.id), name: item.name, system: item.is_system, active: item.is_active })),
+      });
+      setOperations(apiTransactions.map((row) => fromApiTransaction(row, apiProjects, categories)));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Не удалось загрузить данные из базы данных";
+      setFinanceError(message);
+      setOpNotice(`Ошибка загрузки данных: ${message}`);
+    } finally {
+      setFinanceLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadFinanceData(); }, [loadFinanceData]);
+
+  const addGlobalCategory = async (name: string, type: ApiTransactionType) => {
+    await financeApi.createCategory({ name, type, is_active: true });
+    await loadFinanceData();
+  };
+  const toggleGlobalCategory = async (id: number, active: boolean) => {
+    await financeApi.updateCategory(id, { is_active: active });
+    await loadFinanceData();
+  };
+  const deleteGlobalCategory = async (id: number) => {
+    await financeApi.deleteCategory(id);
+    await loadFinanceData();
+  };
 
   useEffect(() => {
     const available = new Set(projects.filter((project) => !project.archived).map((project) => project.name));
@@ -2108,6 +2300,11 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
   const notificationsPopoverRef = useRef<HTMLDivElement>(null);
   const navigateSection = (nextSection: CabinetSection) => {
     setSection(nextSection);
+    try {
+      localStorage.setItem(sectionStorageKey, nextSection);
+    } catch (error) {
+      console.error("Не удалось сохранить активный раздел Finzentra.", error);
+    }
     if (nextSection !== "statement") setReviewFileName(null);
   };
 
@@ -2147,17 +2344,98 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
     settings: ["Настройки", "Справочники и параметры учёта"],
   };
 
-  const createProject = (name: string, description: string): DirectoryProject => {
-    const newProject: DirectoryProject = {
-      id: "p-" + Date.now(),
+  const createProject = async (
+    name: string,
+    description: string,
+    template: IndustryProjectTemplate | null = null,
+  ): Promise<DirectoryProject> => {
+    const templateCategories = template
+      ? [
+          ...template.categories.income,
+          ...template.categories.expenses,
+          ...template.categories.taxes,
+        ]
+      : [];
+    const created = await financeApi.createProject({
       name,
-      description: description || "Новый проект",
-      archived: false,
+      description,
+      is_active: true,
+      categories: templateCategories,
+    });
+    try {
+      const refreshedCategories = await financeApi.getCategories(undefined, true);
+      setApiCategories(refreshedCategories);
+      setLiveCategories({
+        expenses: refreshedCategories.filter((item) => item.project_id == null && item.type === "EXPENSE").map((item) => ({ id: String(item.id), name: item.name, system: item.is_system, active: item.is_active })),
+        income: refreshedCategories.filter((item) => item.project_id == null && item.type === "INCOME").map((item) => ({ id: String(item.id), name: item.name, system: item.is_system, active: item.is_active })),
+        taxes: refreshedCategories.filter((item) => item.project_id == null && item.type === "TAX").map((item) => ({ id: String(item.id), name: item.name, system: item.is_system, active: item.is_active })),
+      });
+    } catch (cause) {
+      // Сам проект и его категории уже сохранены на сервере; не считаем создание неуспешным.
+      console.warn("Проект создан, но список категорий не удалось обновить.", cause);
+    }
+    const mapped: DirectoryProject = {
+      id: String(created.id),
+      name: created.name,
+      description: created.description ?? "Новый проект",
+      archived: !created.is_active,
       operations: 0,
-      color: projectColors[projects.length % projectColors.length],
+      categoriesCount: templateCategories.length,
+      color: template?.accentColor ?? projectColors[projects.length % projectColors.length],
     };
-    setProjects((current) => [...current, newProject]);
-    return newProject;
+    setProjects((current) => [...current, mapped]);
+    return mapped;
+  };
+
+  const updateProject = async (id: string, name: string, description: string) => {
+    const current = projects.find((item) => item.id === id);
+    if (!current) throw new Error("Проект не найден");
+    const saved = await financeApi.updateProject(Number(id), { name, description, is_active: !current.archived });
+    setProjects((items) => items.map((item) => item.id === id ? { ...item, name: saved.name, description: saved.description ?? "Без описания" } : item));
+  };
+
+  const setProjectActive = async (id: string, active: boolean) => {
+    const current = projects.find((item) => item.id === id);
+    if (!current) throw new Error("Проект не найден");
+    const saved = await financeApi.updateProject(Number(id), { name: current.name, description: current.description, is_active: active });
+    setProjects((items) => items.map((item) => item.id === id ? { ...item, archived: !saved.is_active } : item));
+  };
+
+  const deleteProject = async (project: DirectoryProject) => {
+    await financeApi.deleteProject(Number(project.id));
+    setProjects((items) => items.filter((item) => item.id !== project.id));
+  };
+
+  const saveOperation = async (operation: Operation) => {
+    const project = projects.find((item) => item.name === operation.project && !item.archived);
+    if (!project) throw new Error("Выбранный проект не найден или находится в архиве");
+    const type = toApiTransactionType(operation.type);
+    let category = apiCategories.find((item) => item.name.toLocaleLowerCase() === operation.category.toLocaleLowerCase() && item.type === type && item.is_active);
+    if (!category) {
+      category = await financeApi.createCategory({ name: operation.category.trim(), type, is_active: true });
+      setApiCategories((items) => [...items, category!]);
+      const bucket: CategoryTab = operation.type === "income" ? "income" : operation.type === "tax" ? "taxes" : "expenses";
+      setLiveCategories((items) => ({ ...items, [bucket]: [...items[bucket], { id: String(category!.id), name: category!.name, system: category!.is_system, active: true }] }));
+    }
+    const payload = {
+      project_id: Number(project.id), category_id: category.id, type,
+      amount: Math.abs(operation.amount), date_fact: uiDateToApiDate(operation.date),
+      date_period: uiDateToApiDate(operation.periodDate), comment: operation.comment.trim() || null,
+      attachment_url: null,
+    };
+    const saved = operation.id && /^\d+$/.test(operation.id)
+      ? await financeApi.updateTransaction(Number(operation.id), payload)
+      : await financeApi.createTransaction(payload);
+    const mapped = fromApiTransaction(saved, projects.map((item) => ({ id: Number(item.id), name: item.name, description: item.description, is_active: !item.archived })), [...apiCategories.filter((item) => item.id !== category!.id), category]);
+    setOperations((items) => operation.id && items.some((item) => item.id === operation.id)
+      ? items.map((item) => item.id === operation.id ? mapped : item)
+      : [...items, mapped]);
+    setProjects((items) => items.map((item) => {
+      const was = operations.find((old) => old.id === operation.id)?.project;
+      const delta = was === operation.project ? 0 : item.name === was ? -1 : item.name === operation.project ? 1 : 0;
+      return delta ? { ...item, operations: Math.max(0, item.operations + delta) } : item;
+    }));
+    return mapped;
   };
 
   const openNewOperation = () => {
@@ -2175,6 +2453,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
     setDeletingOperation(true);
     try {
       const deleted = pendingDeletion;
+      await financeApi.deleteTransaction(Number(deleted.id));
       setOperations((current) => current.filter((operation) => operation.id !== deleted.id));
       setProjects((current) => current.map((project) => project.name === deleted.project
         ? { ...project, operations: Math.max(0, project.operations - 1) }
@@ -2204,7 +2483,7 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
         <button type="button" className="sidebar-help" onClick={() => setHelpOpen(true)} aria-haspopup="dialog">
           <span>?</span><div><strong>Нужна помощь?</strong><p>Справка по сервису</p></div><CabinetIcon name="chevron" />
         </button>
-        <button className="user-profile" onClick={() => navigate("home")}>
+        <button className="user-profile" onClick={() => { localStorage.removeItem("token"); setUser({ name: "Гость" }); navigate("home"); }}>
           <span className="user-profile__avatar">{userName.charAt(0).toUpperCase()}</span><span><strong>{userName}</strong></span><CabinetIcon name="more" />
         </button>
       </aside>
@@ -2235,45 +2514,30 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
           </div>
         </header>}
         <div className="cabinet-content">
+          {financeLoading && <div className="directory-toast" role="status">Загружаем ваши данные из базы данных…</div>}
+          {financeError && <div className="directory-toast directory-toast--error" role="alert">Не удалось загрузить данные с сервера: {financeError}. Проверьте, что бэкенд запущен и выполнены миграции БД.</div>}
           {opNotice && (
             <div className={`directory-toast ${opNotice === "Не удалось удалить операцию" ? "directory-toast--error" : ""}`} role="status"><CabinetIcon name={opNotice === "Не удалось удалить операцию" ? "info" : "check"} /><span>{opNotice}</span></div>
           )}
           {section === "dashboard" && <DashboardContent projects={projects} operations={operations} periodType={periodType} selectedPeriod={selectedPeriod} onPeriodChange={(nextType, nextPeriod) => { setPeriodType(nextType); setSelectedPeriod(nextPeriod); }} selectedProjects={selectedProjectNames} onSelectedProjectsChange={setSelectedProjectNames} />}
           {section === "operations" && <OperationsContent operations={operations} projects={projects} onAdd={openNewOperation} onDelete={setPendingDeletion} onEdit={openEditOperation} periodType={periodType} selectedPeriod={selectedPeriod} />}
-          {section === "projects" && <ProjectsContent projects={projects} setProjects={setProjects} onProjectRenamed={(previousName, nextName) => {
+          {section === "projects" && <ProjectsContent projects={projects} operations={operations} onFinanceDataChanged={loadFinanceData} onCreateProject={createProject} onUpdateProject={updateProject} onSetProjectActive={setProjectActive} onDeleteProject={deleteProject} onProjectRenamed={(previousName, nextName) => {
             setOperations((current) => current.map((operation) => operation.project === previousName ? { ...operation, project: nextName } : operation));
             setSelectedProjectNames((current) => current.map((name) => name === previousName ? nextName : name));
           }} />}
-          {section === "settings" && <SettingsContent categories={liveCategories} setCategories={setLiveCategories} operations={operations} />}
+          {section === "settings" && <SettingsContent categories={liveCategories} operations={operations} onAddCategory={addGlobalCategory} onToggleCategory={toggleGlobalCategory} onDeleteCategory={deleteGlobalCategory} />}
           {section === "statement" && (
             <BankStatementUpload
               projects={projects}
               categories={liveCategories}
               existingOperations={operations}
               onImportConfirmed={(importedOps: LedgerOperationInput[]) => {
-                if (importedOps.length === 0) return;
-                setOperations((current) => [...importedOps, ...current]);
-                const projectCountIncrements = new Map<string, number>();
-                for (const op of importedOps) {
-                  if (op.project) {
-                    projectCountIncrements.set(
-                      op.project,
-                      (projectCountIncrements.get(op.project) ?? 0) + 1,
-                    );
-                  }
-                }
-                if (projectCountIncrements.size > 0) {
-                  setProjects((current) =>
-                    current.map((project) => {
-                      const delta = projectCountIncrements.get(project.name) ?? 0;
-                      return delta > 0
-                        ? { ...project, operations: project.operations + delta }
-                        : project;
-                    }),
-                  );
-                }
-                setOpNotice(`Импортировано операций в учёт: ${importedOps.length}`);
-                window.setTimeout(() => setOpNotice(""), 3600);
+                // Серверный confirm уже записал подтверждённые операции в transactions.
+                // Повторно POST не отправляем — перечитываем канонические данные из БД.
+                void loadFinanceData().then(() => {
+                  setOpNotice(`Импортировано операций в учёт: ${importedOps.length}`);
+                  window.setTimeout(() => setOpNotice(""), 3600);
+                });
               }}
               onReviewStateChange={setReviewFileName}
               onNavigateToOperations={() => navigateSection("operations")}
@@ -2306,27 +2570,17 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
             operation={editingOperation}
             projects={projects}
             categories={activeCategoryNames}
+            apiCategories={apiCategories}
             onClose={() => setDrawerOpen(false)}
-            onSaved={(op) => {
-              if (editingOperation) {
-                setOperations((current) => current.map((operation) => operation.id === op.id ? op : operation));
-                setProjects((current) => current.map((project) => {
-                  if (project.name === editingOperation.project && project.name !== op.project) {
-                    return { ...project, operations: Math.max(0, project.operations - 1) };
-                  }
-                  if (project.name === op.project && project.name !== editingOperation.project) {
-                    return { ...project, operations: project.operations + 1 };
-                  }
-                  return project;
-                }));
-                setOpNotice(`Операция «${op.comment}» обновлена`);
-              } else {
-                setOperations((current) => [...current, op]);
-                setProjects((current) => current.map((project) => project.name === op.project ? { ...project, operations: project.operations + 1 } : project));
-                setOpNotice(`Операция «${op.comment}» добавлена`);
+            onSaved={async (op) => {
+              try {
+                const saved = await saveOperation(op);
+                setOpNotice(`Операция «${saved.comment}» ${editingOperation ? "обновлена" : "добавлена"}`);
+                setDrawerOpen(false);
+                window.setTimeout(() => setOpNotice(""), 3200);
+              } catch (cause) {
+                setOpNotice(cause instanceof Error ? cause.message : "Не удалось сохранить операцию в базе данных");
               }
-              setDrawerOpen(false);
-              window.setTimeout(() => setOpNotice(""), 3200);
             }}
             onCreateProject={createProject}
           />
@@ -2363,12 +2617,60 @@ function AppDestination({ navigate }: { navigate: (screen: Screen) => void }) {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>("app");
+  const hasSavedToken = typeof window !== "undefined" && Boolean(localStorage.getItem("token"));
+  const [screen, setScreen] = useState<Screen>(hasSavedToken ? "app" : "home");
   const [user, setUser] = useState<AppUser>({ name: "Гость" });
+  const [isRestoringSession, setIsRestoringSession] = useState(hasSavedToken);
+
+  // При перезагрузке проверяем сохранённый токен и восстанавливаем профиль.
+  // Если токен истёк или недействителен, возвращаем пользователя на главную.
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      setScreen("home");
+      setIsRestoringSession(false);
+      return;
+    }
+
+    let cancelled = false;
+    apiRequest<{ id: number; name?: string | null }>("/api/auth/me")
+      .then((profile) => {
+        if (cancelled) return;
+        setUser({ id: profile.id, name: profile.name || "Пользователь" });
+        setScreen("app");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("Не удалось восстановить сессию Finzentra.", error);
+        localStorage.removeItem("token");
+        setUser({ name: "Гость" });
+        setScreen("home");
+      })
+      .finally(() => {
+        if (!cancelled) setIsRestoringSession(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const navigate = (next: Screen) => {
     setScreen(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  if (isRestoringSession) {
+    return (
+      <div className="destination" role="status" aria-live="polite">
+        <div className="destination__content">
+          <p className="auth-kicker">Finzentra</p>
+          <h1>Восстанавливаем рабочее пространство…</h1>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AppUserContext.Provider value={{ user, setUser }}>
       {screen === "register" && <Registration navigate={navigate} />}

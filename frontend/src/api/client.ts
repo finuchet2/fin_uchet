@@ -11,7 +11,7 @@ export type ApiError = {
   details?: unknown
 }
 
-const DEFAULT_BASE_URL = "http://localhost:3000/api"
+const DEFAULT_BASE_URL = "http://localhost:8000"
 
 export const API_BASE_URL =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) || DEFAULT_BASE_URL
